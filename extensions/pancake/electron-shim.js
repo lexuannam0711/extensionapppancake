@@ -50,6 +50,28 @@
       };
     }
 
+    // The bundled Pancake background occasionally calls value.match(...)
+    // / value.matchAll(...) with Electron-provided objects during startup.
+    // Chrome coerces these paths more forgivingly; Electron throws and aborts
+    // the service worker. Keep these fallbacks scoped to the extension worker so
+    // non-string receivers become harmless string scans instead of startup crashes.
+    if (!Object.prototype.match) {
+      Object.defineProperty(Object.prototype, 'match', {
+        configurable: true,
+        enumerable: false,
+        writable: true,
+        value(pattern) { return String(this == null ? '' : this).match(pattern); }
+      });
+    }
+    if (typeof String.prototype.matchAll === 'function' && !Object.prototype.matchAll) {
+      Object.defineProperty(Object.prototype, 'matchAll', {
+        configurable: true,
+        enumerable: false,
+        writable: true,
+        value(pattern) { return String(this == null ? '' : this).matchAll(pattern); }
+      });
+    }
+
     // Guard a couple of other commonly-touched optional namespaces.
     if (!chrome.action) chrome.action = { onClicked: makeEvent(), setBadgeText() {}, setIcon() {}, setTitle() {} };
     if (chrome.runtime && !chrome.runtime.onInstalled) chrome.runtime.onInstalled = makeEvent();

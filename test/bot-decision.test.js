@@ -1,12 +1,13 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
+const PDBBotDecision = require('../src/renderer/botDecision');
 const {
   shouldSkipByTags,
   decideBeforeAnalysis,
   decideAfterAnalysis,
   decideBeforeSend
-} = require('../src/renderer/botDecision');
+} = PDBBotDecision;
 
 test('bot decision: shouldSkipByTags matches current tag semantics', () => {
   assert.equal(shouldSkipByTags(null), false);
@@ -182,4 +183,11 @@ test('bot decision: final send guard allows customer-last sends', () => {
   assert.equal(decision.action, 'SEND_SHORTCUT');
   assert.equal(decision.shouldSendShortcut, true);
   assert.equal(decision.shouldRecordExample, true);
+});
+
+test('bot decision: manual fill only records examples when assistant is on or test message is typed', () => {
+  assert.equal(PDBBotDecision.shouldRecordManualExample({ assistantEnabled: false, typedMessage: '' }), false);
+  assert.equal(PDBBotDecision.shouldRecordManualExample({ assistantEnabled: false, typedMessage: '   ' }), false);
+  assert.equal(PDBBotDecision.shouldRecordManualExample({ assistantEnabled: false, typedMessage: 'giá bao nhiêu' }), true);
+  assert.equal(PDBBotDecision.shouldRecordManualExample({ assistantEnabled: true, typedMessage: '' }), true);
 });

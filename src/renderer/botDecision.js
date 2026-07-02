@@ -133,11 +133,16 @@ function decideBeforeSend({ lastSender } = {}) {
   };
 }
 
+function shouldRecordManualExample({ assistantEnabled, typedMessage } = {}) {
+  return Boolean(assistantEnabled || String(typedMessage || '').trim());
+}
+
 const PDBBotDecision = {
   shouldSkipByTags,
   decideBeforeAnalysis,
   decideAfterAnalysis,
-  decideBeforeSend
+  decideBeforeSend,
+  shouldRecordManualExample
 };
 
 if (typeof window !== 'undefined') window.PDBBotDecision = PDBBotDecision;

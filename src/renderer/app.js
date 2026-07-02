@@ -209,11 +209,42 @@ function prefixRuntime(runtime, message) {
   return `[${getRuntimeLabel(runtime)}] ${message}`;
 }
 
-async function executeInTab(tabId, js) {
+function serializeError(error) {
+  if (!error) return 'Lỗi không xác định';
+  if (typeof error === 'string') return error;
+  const parts = [];
+  if (error.message) parts.push(error.message);
+  if (error.code) parts.push(`code=${error.code}`);
+  if (error.name) parts.push(`name=${error.name}`);
+  try {
+    const json = JSON.stringify(error);
+    if (json && json !== '{}') parts.push(json);
+  } catch (_) {}
+  return parts.join(' | ') || String(error);
+}
+
+function getWebviewReadiness(tab) {
+  const wv = tab?.webview;
+  if (!wv) return { ok: false, reason: 'Thiếu webview' };
+  if (typeof wv.isDestroyed === 'function') {
+    try { if (wv.isDestroyed()) return { ok: false, reason: 'Webview đã bị hủy' }; } catch (_) {}
+  }
+  if (!wv.executeJavaScript) return { ok: false, reason: 'Webview chưa hỗ trợ executeJavaScript' };
+  return { ok: true, reason: '' };
+}
+
+async function executeInTab(tabId, js, label = 'executeJavaScript') {
   const tab = getTab(tabId);
   const wv = tab.webview;
-  if (!wv || !wv.executeJavaScript) throw new Error('Webview chưa sẵn sàng');
-  return wv.executeJavaScript(js, false);
+  const ready = getWebviewReadiness(tab);
+  if (!ready.ok) throw new Error(`${tab.label}: ${ready.reason}`);
+  try {
+    return await wv.executeJavaScript(js, false);
+  } catch (error) {
+    let url = '';
+    try { url = safeGetURL(wv, wv.src || ''); } catch (_) {}
+    throw new Error(`${tab.label}: ${label} lỗi (${tab.loaded ? 'loaded' : 'loading'}${url ? `, url=${url}` : ''}) - ${serializeError(error)}`);
+  }
 }
 
 async function executeInPancake(js) {
@@ -227,15 +258,17 @@ async function injectAutomation(tabId = activeWvTab) {
   // automation.js is idempotent (guards on window.__PDB__), but skip the
   // executeJavaScript round-trip entirely once injected for this page load.
   if (tab.automationInjected) return true;
-  await executeInTab(tab.id, automationCode);
+  await executeInTab(tab.id, automationCode, 'injectAutomation');
   tab.automationInjected = true;
   return true;
 }
 
 async function botCallForTab(tabId, method, ...args) {
+  const tab = getTab(tabId);
+  if (!tab.botCapable) throw new Error('Tab này không hỗ trợ bot');
   await injectAutomation(tabId);
   const argJson = JSON.stringify(args);
-  return executeInTab(tabId, `window.__PDB__.${method}.apply(window.__PDB__, ${argJson})`);
+  return executeInTab(tabId, `window.__PDB__.${method}.apply(window.__PDB__, ${argJson})`, method);
 }
 
 async function botCall(method, ...args) {
@@ -407,23 +440,40 @@ function renderShortcutPalette() {
   ).join('');
 }
 
-// Nguồn học cho nút điền: ưu tiên ô test #aiMessage, sau đó tin khách thật
-// Trợ lý vừa đọc (currentContextMessage). Rỗng cả hai -> '' (chỉ điền, không học).
-function resolveLearnSource() {
-  const typed = ($('aiMessage')?.value || '').trim();   // Req 2.1
+// Nguồn học cho thao tác dạy có chủ đích: ưu tiên ô test #aiMessage, sau đó
+// chỉ dùng tin khách thật khi Trợ lý gợi ý real-time đang bật. Khi trợ lý tắt,
+// bấm nút gợi ý/palette chỉ điền shortcut, không âm thầm lưu ví dụ từ hội thoại cũ.
+function resolveLearnSource({ allowAssistantContext = assistantEnabled } = {}) {
+  const typed = ($('aiMessage')?.value || '').trim();
   if (typed) return typed;
-  return currentContextMessage || '';                    // Req 2.2, 2.4
+  return allowAssistantContext ? (currentContextMessage || '') : '';
 }
 
-// Bấm nút bảng: điền mã vào Pancake (luôn nếu hợp lệ), học cặp tin→mã theo
-// nguồn ưu tiên (ô test > tin khách thật). KHÔNG tự gửi. Điền trước, học sau.
+function shouldRecordManualExample() {
+  const typedMessage = $('aiMessage')?.value || '';
+  if (window.PDBBotDecision?.shouldRecordManualExample) {
+    return window.PDBBotDecision.shouldRecordManualExample({ assistantEnabled, typedMessage });
+  }
+  return Boolean(assistantEnabled || typedMessage.trim());
+}
+
+async function fillShortcutIntoActiveTab(shortcut) {
+  const tab = getTab(activeWvTab);
+  if (!tab.botCapable) return { ok: false, message: 'Tab hiện tại không hỗ trợ điền shortcut. Hãy chọn Bot 1 hoặc Bot 2.' };
+  const ready = getWebviewReadiness(tab);
+  if (!ready.ok) return { ok: false, message: `${tab.label}: ${ready.reason}` };
+  return botCallForTab(tab.id, 'setReplyText', shortcut.trim());
+}
+
+// Bấm nút bảng: điền mã vào Pancake (luôn nếu hợp lệ), chỉ học khi người dùng
+// nhập tin test hoặc đang bật Trợ lý gợi ý real-time. KHÔNG tự gửi.
 async function teachAndFill(shortcut) {
-  if (!isShortcut(shortcut)) { toast('Shortcut không đúng định dạng'); return; } // Req 3.4
-  const result = await botCall('setReplyText', shortcut);                  // Req 3.1
-  const source = resolveLearnSource();
-  if (source) {                                                            // Req 3.2, 2.4
-    try { await recordExample(source, shortcut, lastAnalysis?.intent || ''); } // Req 3.2
-    catch (_) { toast('Đã điền nhưng lưu ví dụ thất bại'); }                // Req 3.5
+  if (!isShortcut(shortcut)) { toast('Shortcut không đúng định dạng'); return; }
+  const result = await fillShortcutIntoActiveTab(shortcut);
+  const source = shouldRecordManualExample() ? resolveLearnSource() : '';
+  if (result?.ok && source) {
+    try { await recordExample(source, shortcut, lastAnalysis?.intent || ''); }
+    catch (_) { toast('Đã điền nhưng lưu ví dụ thất bại'); }
   }
   toast(result?.ok ? `Đã điền ${shortcut}${source ? ' + đã học' : ''}` : (result?.message || 'Không điền được'));
 }
@@ -745,10 +795,10 @@ async function fillShortcut(shortcut) {
     toast('Chặn: không phải shortcut /n');
     return;
   }
-  const result = await botCall('setReplyText', shortcut.trim());
-  const source = resolveLearnSource();   // ưu tiên ô test, sau đó tin khách thật
+  const result = await fillShortcutIntoActiveTab(shortcut);
+  const source = shouldRecordManualExample() ? resolveLearnSource() : '';
   if (result.ok && source) {
-    // Điền = xác nhận đúng -> học cặp (tin khách thật/ô test -> mã).
+    // Điền từ vùng gợi ý chỉ học khi người dùng nhập tin test hoặc bật Trợ lý real-time.
     try { await recordExample(source, shortcut.trim(), lastAnalysis?.intent || ''); }
     catch (_) { toast('Đã điền nhưng lưu ví dụ thất bại'); }
   }
@@ -1653,7 +1703,20 @@ function bindUi() {
     });
     tab.webview.addEventListener('did-start-loading', () => {
       tab.automationInjected = false;
+      tab.loaded = false;
       if (activeWvTab === tab.id) $('webviewStatus').textContent = 'Đang tải...';
+    });
+    tab.webview.addEventListener('did-fail-load', (event) => {
+      tab.automationInjected = false;
+      tab.loaded = false;
+      const detail = `${tab.label} load lỗi: ${event.errorCode || ''} ${event.errorDescription || ''}`.trim();
+      if (activeWvTab === tab.id) $('webviewStatus').textContent = detail;
+    });
+    tab.webview.addEventListener('render-process-gone', (event) => {
+      tab.automationInjected = false;
+      tab.loaded = false;
+      const detail = `${tab.label} renderer dừng: ${event.reason || 'unknown'}`;
+      if (activeWvTab === tab.id) $('webviewStatus').textContent = detail;
     });
   });
 }
