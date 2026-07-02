@@ -1,0 +1,25 @@
+{
+  "name": "pancake-desktop-ai-shortcut-bot-v3",
+  "version": "3.0.0",
+  "description": "Electron desktop app chạy Pancake + AI chọn shortcut /n + upload Excel, không cần extension/VPS.",
+  "main": "src/main.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "electron .",
+    "server": "node src/server/index.js",
+    "check": "node --check src/main.js && node --check src/preload.js && node --check src/server/index.js && node --check src/server/ai.js && node --check src/server/rules.js && node --check src/server/shortcutImporter.js && node --check src/server/shortcutMatcher.js && node --check src/server/store.js && node --check src/server/validators.js && node --check src/renderer/app.js && node --check src/renderer/automation.js && node --check src/renderer/botDecision.js && node --check src/renderer/icons.js",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "@google/generative-ai": "^0.24.1",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "electron": "^34.0.0",
+    "express": "^4.21.2",
+    "multer": "^1.4.5-lts.1",
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "fast-check": "4.8.0"
+  }
+}

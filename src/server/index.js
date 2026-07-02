@@ -1,0 +1,345 @@
+require('dotenv').config();
+const express = require('express');
+const cors = require('cors');
+const multer = require('multer');
+const { getSettings, saveSettings, getShortcuts, saveShortcuts, getLogs, appendLog, clearLogs, getExamples, appendExample, deleteExample, deleteExampleByPair, clearExamples, getReviewQueue, addOrUpdateReviewItem, markReviewItemDone, deleteReviewItem, clearDoneReviewItems, UPLOADS } = require('./store');
+const { parseExcel, createTemplateBuffer } = require('./shortcutImporter');
+const { analyzeMessageWithAI, summarizeAIConfig, testAIConnection } = require('./ai');
+const { classifyMessage } = require('./rules');
+const { findSimilarExamples } = require('./shortcutMatcher');
+const { isShortcut } = require('./validators');
+const telegram = require('./telegram');
+
+const upload = multer({ dest: UPLOADS });
+let lastImportPreview = null;
+
+// Shared handler for /api/ai/analyze-message and its legacy alias.
+async function handleAnalyzeMessage(req, res) {
+  const { customerMessage = '', customerName = '', currentTags = [], context = {}, conversationHistory = [], orderStatus = null } = req.body || {};
+  const settings = await getSettings();
+  const shortcuts = await getShortcuts();
+  let similarExamples = [];
+  try {
+    const ex = await getExamples();
+    similarExamples = findSimilarExamples(customerMessage, ex.items, 6);
+  } catch (_) { /* learning is best-effort, never break analyze */ }
+  const analysis = await analyzeMessageWithAI({
+    customerMessage,
+    shortcuts: shortcuts.items,
+    context: { ...context, customerName, currentTags, orderStatus },
+    settings,
+    examples: similarExamples,
+    history: Array.isArray(conversationHistory) ? conversationHistory.slice(-5) : []
+  });
+  const shouldSend = Boolean(
+    settings.autoSend &&
+    analysis.bestShortcut &&
+    analysis.confidence >= Number(settings.minConfidence || 0.75) &&
+    !analysis.shouldEscalate
+  );
+  const output = { ...analysis, shouldSend, usedExamples: similarExamples.length };
+  await appendLog({
+    level: 'INFO',
+    type: 'ANALYZE',
+    message: `${analysis.intent}: ${analysis.bestShortcut || 'null'} - ${analysis.reason}`,
+    data: { customerMessage, output }
+  });
+  res.json(output);
+}
+
+function createApp() {
+  const app = express();
+  app.use(cors({ origin: true }));
+  app.use(express.json({ limit: '2mb' }));
+  app.use(express.urlencoded({ extended: true }));
+
+  app.get('/health', async (_req, res) => {
+    const settings = await getSettings();
+    const shortcuts = await getShortcuts();
+    res.json({ ok: true, time: new Date().toISOString(), settings, shortcutCount: shortcuts.items.length });
+  });
+
+  app.get('/', (_req, res) => {
+    res.type('html').send(`<!doctype html><html><head><meta charset="utf-8"><title>Pancake Desktop Bot</title><style>body{font-family:Arial;padding:30px;background:#f6fbf8;color:#102018}.card{background:white;border-radius:18px;padding:24px;box-shadow:0 10px 30px #0001;max-width:800px}code{background:#eef7f0;padding:2px 6px;border-radius:6px}</style></head><body><div class="card"><h1>Pancake Desktop AI Shortcut Bot v3</h1><p>Server đang chạy tại <code>http://localhost:${process.env.PORT || 8787}</code>.</p><p>Mở app Electron bằng <code>npm start</code> để chạy Pancake trong cửa sổ desktop.</p><p>API: <code>/health</code>, <code>/api/shortcuts</code>, <code>/api/ai/analyze-message</code>.</p></div></body></html>`);
+  });
+
+  app.get('/api/settings', async (_req, res) => res.json(await getSettings()));
+  app.post('/api/settings', async (req, res) => {
+    const saved = await saveSettings(req.body || {});
+    await appendLog({ level: 'INFO', type: 'SETTINGS', message: 'Đã lưu settings', data: saved });
+    res.json(saved);
+  });
+
+  app.get('/api/ai/config', async (_req, res) => {
+    const settings = await getSettings();
+    res.json(summarizeAIConfig(settings));
+  });
+
+  app.post('/api/ai/config', async (req, res) => {
+    const patch = {
+      aiBaseUrl: String(req.body?.aiBaseUrl || '').trim(),
+      aiApiKey: String(req.body?.aiApiKey || '').trim(),
+      aiModel: String(req.body?.aiModel || '').trim()
+    };
+    const saved = await saveSettings(patch);
+    const output = summarizeAIConfig(saved);
+    await appendLog({ level: 'INFO', type: 'AI_CONFIG', message: 'Đã lưu AI config', data: output });
+    res.json(output);
+  });
+
+  app.post('/api/ai/test', async (req, res) => {
+    const settings = await getSettings();
+    try {
+      const result = await testAIConnection(settings, req.body || {});
+      await appendLog({ level: 'SUCCESS', type: 'AI_TEST', message: result.message, data: result.config });
+      res.json(result);
+    } catch (error) {
+      await appendLog({ level: 'ERROR', type: 'AI_TEST', message: error.message });
+      res.status(400).json({ error: error.message });
+    }
+  });
+
+  app.get('/api/shortcuts', async (_req, res) => res.json(await getShortcuts()));
+  app.post('/api/shortcuts', async (req, res) => {
+    const item = req.body || {};
+    if (!isShortcut(item.shortcut)) return res.status(400).json({ error: 'Shortcut phải có dạng /n' });
+    const data = await getShortcuts();
+    const now = new Date().toISOString();
+    const normalized = {
+      shortcut: item.shortcut.trim(),
+      topic: String(item.topic || ''),
+      quickReply: String(item.quickReply || ''),
+      message: String(item.message || ''),
+      photos: String(item.photos || ''),
+      folders: String(item.folders || ''),
+      files: String(item.files || ''),
+      createdAt: item.createdAt || now,
+      updatedAt: now
+    };
+    const idx = data.items.findIndex((x) => x.shortcut === normalized.shortcut);
+    if (idx >= 0) data.items[idx] = { ...data.items[idx], ...normalized };
+    else data.items.push(normalized);
+    await saveShortcuts(data.items);
+    await appendLog({ level: 'SUCCESS', type: 'SHORTCUT', message: `Đã lưu ${normalized.shortcut}` });
+    res.json({ ok: true, item: normalized, items: data.items });
+  });
+
+  app.delete('/api/shortcuts', async (_req, res) => {
+    await saveShortcuts([]);
+    await appendLog({ level: 'WARN', type: 'SHORTCUT', message: 'Đã xóa toàn bộ shortcuts' });
+    res.json({ ok: true, items: [] });
+  });
+
+  app.delete('/api/shortcuts/:shortcut', async (req, res) => {
+    const shortcut = `/${String(req.params.shortcut || '').replace(/^\//, '')}`;
+    const data = await getShortcuts();
+    const items = data.items.filter((x) => x.shortcut !== shortcut);
+    await saveShortcuts(items);
+    await appendLog({ level: 'WARN', type: 'SHORTCUT', message: `Đã xóa ${shortcut}` });
+    res.json({ ok: true, items });
+  });
+
+  app.post('/api/shortcuts/import-excel', upload.single('file'), async (req, res) => {
+    if (!req.file) return res.status(400).json({ error: 'Thiếu file Excel field=file' });
+    try {
+      const preview = parseExcel(req.file.path);
+      lastImportPreview = preview;
+      await appendLog({ level: 'INFO', type: 'IMPORT', message: `Preview Excel: ${preview.validRows.length} hợp lệ, ${preview.errors.length} lỗi` });
+      res.json(preview);
+    } catch (error) {
+      await appendLog({ level: 'ERROR', type: 'IMPORT', message: error.message });
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.post('/api/shortcuts/commit-import', async (req, res) => {
+    if (!lastImportPreview) return res.status(400).json({ error: 'Chưa có preview import' });
+    const mode = req.body?.mode || 'overwrite';
+    const current = await getShortcuts();
+    const map = new Map(current.items.map((item) => [item.shortcut, item]));
+    for (const item of lastImportPreview.validRows) {
+      if (mode === 'skip' && map.has(item.shortcut)) continue;
+      map.set(item.shortcut, { ...(map.get(item.shortcut) || {}), ...item, updatedAt: new Date().toISOString() });
+    }
+    const items = Array.from(map.values()).sort((a, b) => Number(a.shortcut.slice(1)) - Number(b.shortcut.slice(1)));
+    await saveShortcuts(items);
+    await appendLog({ level: 'SUCCESS', type: 'IMPORT', message: `Đã import ${lastImportPreview.validRows.length} shortcuts` });
+    res.json({ ok: true, items });
+  });
+
+  app.get('/api/shortcuts/template', (_req, res) => {
+    const buffer = createTemplateBuffer();
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', 'attachment; filename="pancake-shortcuts-template.xlsx"');
+    res.send(buffer);
+  });
+
+  app.post('/api/ai/analyze-message', handleAnalyzeMessage);
+  // Backward-compatible alias for older clients.
+  app.post('/api/ai/select-shortcut', handleAnalyzeMessage);
+
+  // --- Learning: examples (few-shot) ---
+  app.get('/api/examples', async (_req, res) => res.json(await getExamples()));
+
+  app.post('/api/examples', async (req, res) => {
+    const { message = '', shortcut = '', intent = '' } = req.body || {};
+    if (!isShortcut(shortcut)) return res.status(400).json({ error: 'Shortcut phải có dạng /n' });
+    const item = await appendExample({ message, shortcut, intent });
+    if (!item) return res.status(400).json({ error: 'Thiếu message hoặc shortcut' });
+    const data = await getExamples();
+    res.json({ ok: true, item, count: data.items.length });
+  });
+
+  app.delete('/api/examples/:id', async (req, res) => {
+    const data = await deleteExample(req.params.id);
+    res.json({ ok: true, ...data });
+  });
+
+  app.post('/api/examples/delete-pair', async (req, res) => {
+    const { message = '', shortcut = '' } = req.body || {};
+    const data = await deleteExampleByPair(message, shortcut);
+    await appendLog({ level: 'WARN', type: 'LEARN', message: `Đã xóa ví dụ sai: ${shortcut}`, data: { message } });
+    res.json({ ok: true, ...data });
+  });
+
+  app.post('/api/examples/clear', async (_req, res) => res.json(await clearExamples()));
+
+  // --- Review queue (Admin Review Queue) ---
+  app.get('/api/review-queue', async (_req, res) => {
+    try {
+      res.json(await getReviewQueue());
+    } catch (error) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.post('/api/review-queue', async (req, res) => {
+    try {
+      const body = req.body || {};
+      const conversationId = String(body.conversationId || '').trim();
+      const pancakeUrl = String(body.pancakeUrl || '').trim();
+      const hasValidUrl = /^https?:\/\//.test(pancakeUrl);
+      if (!conversationId && !hasValidUrl) {
+        return res.status(400).json({ error: 'Thiếu tham chiếu cuộc trò chuyện' });
+      }
+      const { item, updated } = await addOrUpdateReviewItem(body);
+      await appendLog({
+        level: 'INFO',
+        type: 'REVIEW_QUEUE',
+        message: `${updated ? 'Cập nhật' : 'Thêm'} ca chờ xử lý: ${item.conversationId || item.pancakeUrl}`,
+        data: { item, updated }
+      });
+      res.json({ ok: true, item, updated });
+    } catch (error) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.post('/api/review-queue/:id/done', async (req, res) => {
+    try {
+      const item = await markReviewItemDone(req.params.id);
+      if (!item) return res.status(404).json({ error: 'Không tìm thấy mục trong hàng đợi' });
+      await appendLog({
+        level: 'SUCCESS',
+        type: 'REVIEW_QUEUE',
+        message: `Đã hoàn tất ca chờ xử lý: ${item.conversationId || item.pancakeUrl}`,
+        data: { item }
+      });
+      res.json({ ok: true, item });
+    } catch (error) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.delete('/api/review-queue/:id', async (req, res) => {
+    try {
+      const result = await deleteReviewItem(req.params.id);
+      if (!result) return res.status(404).json({ error: 'Không tìm thấy mục trong hàng đợi' });
+      await appendLog({
+        level: 'WARN',
+        type: 'REVIEW_QUEUE',
+        message: `Đã xóa ca chờ xử lý: ${req.params.id}`,
+        data: { id: req.params.id }
+      });
+      res.json({ ok: true, items: result.items });
+    } catch (error) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.post('/api/review-queue/clear-done', async (_req, res) => {
+    try {
+      const { items, removed } = await clearDoneReviewItems();
+      await appendLog({
+        level: 'INFO',
+        type: 'REVIEW_QUEUE',
+        message: `Đã xóa ${removed} mục đã hoàn tất khỏi hàng đợi`,
+        data: { removed }
+      });
+      res.json({ ok: true, removed, items });
+    } catch (error) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.post('/api/rules/classify', (req, res) => res.json(classifyMessage(req.body?.text || '')));
+
+  app.get('/api/logs', async (req, res) => {
+    const logs = await getLogs();
+    const limit = Math.min(Number(req.query.limit || 200), 800);
+    res.json(logs.slice(0, limit));
+  });
+  app.post('/api/logs', async (req, res) => res.json(await appendLog(req.body || {})));
+  app.post('/api/logs/clear', async (_req, res) => res.json(await clearLogs()));
+
+  app.post('/api/notify/test', async (_req, res) => {
+    const msg = 'Test thông báo từ Pancake Desktop AI Shortcut Bot';
+    await appendLog({ level: 'INFO', type: 'NOTIFY', message: msg });
+    const sent = await telegram.sendTelegram(`🔔 ${msg}`);
+    res.json({ ok: true, message: msg, telegramSent: sent });
+  });
+
+  app.post('/api/notify/buy', async (req, res) => {
+    const { customerName = '', phone = '', address = '', message = '' } = req.body || {};
+    const sent = await telegram.notifyBuyCustomer({ customerName, phone, address, message });
+    res.json({ ok: true, telegramSent: sent });
+  });
+
+  // Centralized error handler: log + notify Telegram, never leak stack to client.
+  app.use((err, _req, res, _next) => {
+    const detail = err && err.message ? err.message : String(err);
+    appendLog({ level: 'ERROR', type: 'SERVER', message: `Lỗi xử lý request: ${detail}` }).catch(() => {});
+    telegram.notifyError('Request', detail).catch(() => {});
+    if (res.headersSent) return;
+    res.status(500).json({ error: 'Lỗi server nội bộ' });
+  });
+
+  return app;
+}
+
+function startServer(port = Number(process.env.PORT || 8787)) {
+  const app = createApp();
+  return new Promise((resolve) => {
+    const server = app.listen(port, () => {
+      console.log(`[server] http://localhost:${port}`);
+      telegram.notifyServerUp(port).catch(() => {});
+      telegram.scheduleDailyReport(getLogs);
+      resolve(server);
+    });
+  });
+}
+
+// Notify on crashes (best-effort, non-blocking). Do not exit the process here;
+// preserve existing behavior — only add the Telegram alert.
+process.on('uncaughtException', (err) => {
+  telegram.notifyError('uncaughtException', err && err.message ? err.message : String(err)).catch(() => {});
+});
+process.on('unhandledRejection', (reason) => {
+  telegram.notifyError('unhandledRejection', reason && reason.message ? reason.message : String(reason)).catch(() => {});
+});
+
+if (require.main === module) {
+  startServer();
+}
+
+module.exports = { createApp, startServer };

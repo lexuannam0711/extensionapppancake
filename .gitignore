@@ -1,0 +1,32 @@
+# Dependencies
+node_modules/
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# Claude / local agent tooling
+.claude/
+.agents/
+.remember/
+.gitnexus/
+.kiro/
+.vscode/
+skills-lock.json
+
+# Runtime data / uploads
+server/data/*.json
+uploads/*
+!server/data/.gitkeep
+!uploads/.gitkeep
+
+# Logs and temporary files
+*.log
+.DS_Store
+Thumbs.db
+
+# Build outputs / caches
+dist/
+build/
+.cache/
