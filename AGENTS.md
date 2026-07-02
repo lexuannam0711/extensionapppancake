@@ -41,3 +41,20 @@ This project is indexed by GitNexus as **pancake-desktop-ai-shortcut-bot-v3** (2
 | Index, status, clean, wiki CLI commands | `.claude/skills/gitnexus/gitnexus-cli/SKILL.md` |
 
 <!-- gitnexus:end -->
+
+# AI Dev Department Workflow
+
+This project uses an AI dev department workflow. The user is **Admin/Sếp tổng** and has final approval authority.
+
+## Operating Rules
+
+- Use task-scaled AI roles for planning, development, review, security/privacy, QA, and GitOps.
+- Cross-check meaningful work before reporting completion.
+- Run security/privacy checks for secrets, customer data, uploads, logs, GitHub pushes, deploys, and publish actions.
+- Verify runtime changes with tests or real app flow checks when applicable.
+- Ask Admin approval before push, deploy, publish, destructive actions, or sensitive config/secret changes.
+- Preserve and follow all GitNexus requirements above, including impact analysis before editing symbols and `gitnexus_detect_changes()` before committing.
+
+## Reference
+
+See `docs/ai-dev-department.md` for the full role model, task workflow, gates, and reporting format.
