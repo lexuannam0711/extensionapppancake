@@ -185,9 +185,10 @@ test('bot decision: final send guard allows customer-last sends', () => {
   assert.equal(decision.shouldRecordExample, true);
 });
 
-test('bot decision: manual fill only records examples when assistant is on or test message is typed', () => {
+test('bot decision: manual fill only records examples when assistant is on', () => {
   assert.equal(PDBBotDecision.shouldRecordManualExample({ assistantEnabled: false, typedMessage: '' }), false);
   assert.equal(PDBBotDecision.shouldRecordManualExample({ assistantEnabled: false, typedMessage: '   ' }), false);
-  assert.equal(PDBBotDecision.shouldRecordManualExample({ assistantEnabled: false, typedMessage: 'giá bao nhiêu' }), true);
+  assert.equal(PDBBotDecision.shouldRecordManualExample({ assistantEnabled: false, typedMessage: 'giá bao nhiêu' }), false);
   assert.equal(PDBBotDecision.shouldRecordManualExample({ assistantEnabled: true, typedMessage: '' }), true);
+  assert.equal(PDBBotDecision.shouldRecordManualExample({ assistantEnabled: true, typedMessage: 'giá bao nhiêu' }), true);
 });

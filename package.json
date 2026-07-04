@@ -7,7 +7,7 @@
   "scripts": {
     "start": "electron .",
     "server": "node src/server/index.js",
-    "check": "node --check src/main.js && node --check src/preload.js && node --check src/server/index.js && node --check src/server/ai.js && node --check src/server/rules.js && node --check src/server/shortcutImporter.js && node --check src/server/shortcutMatcher.js && node --check src/server/store.js && node --check src/server/validators.js && node --check src/renderer/app.js && node --check src/renderer/automation.js && node --check src/renderer/botDecision.js && node --check src/renderer/icons.js",
+    "check": "node --check src/main.js && node --check src/preload.js && node --check src/server/index.js && node --check src/server/addressLookup.js && node --check src/server/ai.js && node --check src/server/rules.js && node --check src/server/shortcutImporter.js && node --check src/server/shortcutMatcher.js && node --check src/server/store.js && node --check src/server/validators.js && node --check src/renderer/app.js && node --check src/renderer/automation.js && node --check src/renderer/botDecision.js && node --check src/renderer/icons.js",
     "test": "node --test"
   },
   "dependencies": {

@@ -2,6 +2,19 @@ function normalizeText(text) {
   return String(text || '').toLowerCase().normalize('NFC').trim();
 }
 
+function foldVietnameseText(text) {
+  return normalizeText(text)
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .replace(/đ/g, 'd');
+}
+
+function includesVietnameseKeyword(text, keywords) {
+  const normalized = normalizeText(text);
+  const folded = foldVietnameseText(text);
+  return keywords.some((keyword) => normalized.includes(keyword) || folded.includes(foldVietnameseText(keyword)));
+}
+
 // Detect messages that are NOT real customer text: empty, stickers, likes,
 // reactions, photos/files-only, or pure links. These must never be treated as
 // an address/phone (which would wrongly tag "Mua hàng" + mark unread).
@@ -50,16 +63,19 @@ function detectPhoneNumber(text) {
 }
 
 function detectAddress(text) {
-  const s = normalizeText(stripUrls(text));
+  const raw = stripUrls(text);
+  const s = normalizeText(raw);
+  const folded = foldVietnameseText(raw);
   // Strong address keywords (administrative units / explicit address markers).
   const keywords = [
     'xã', 'phường', 'huyện', 'quận', 'tỉnh', 'thành phố', 'thôn', 'bản',
     'ngõ', 'ngách', 'số nhà', 'chung cư', 'ship về', 'gửi về',
     'địa chỉ', 'đ/c', 'ấp', 'khu phố'
   ];
-  const hasKeyword = keywords.some((k) => s.includes(k));
+  const hasKeyword = includesVietnameseKeyword(raw, keywords);
   // A house-number style pattern, e.g. "số 12", "12 ngõ", "45 đường".
-  const hasAddressPattern = /\b(số|sn)\s*\d+|\d+\s*(ngõ|đường|phố|tổ|thôn|ấp)\b/.test(s);
+  const hasAddressPattern = /\b(số|sn)\s*\d+|\d+\s*(ngõ|đường|phố|tổ|thôn|ấp)\b/.test(s)
+    || /\b(so|sn)\s*\d+|\d+\s*(ngo|duong|pho|to|thon|ap)\b/.test(folded);
   return hasKeyword || hasAddressPattern;
 }
 
@@ -107,11 +123,14 @@ function extractAddress(text) {
   const cleaned = stripUrls(String(text || '')).replace(/\s+/g, ' ').trim();
   if (!cleaned) return null;
   const lower = cleaned.toLowerCase();
+  const folded = foldVietnameseText(cleaned);
   const markers = ['địa chỉ', 'đ/c', 'đc ', 'số nhà', 'thôn', 'xã', 'phường', 'huyện', 'quận', 'tỉnh', 'thành phố', 'tp ', 'khu phố', 'ấp', 'ngõ', 'đường'];
   let idx = -1;
   for (const mk of markers) {
     const at = lower.indexOf(mk);
-    if (at >= 0 && (idx === -1 || at < idx)) idx = at;
+    const foldedAt = folded.indexOf(foldVietnameseText(mk));
+    const markerIdx = at >= 0 ? at : foldedAt;
+    if (markerIdx >= 0 && (idx === -1 || markerIdx < idx)) idx = markerIdx;
   }
   if (idx === -1) return null;
   // Take from the marker to the end, trimmed; strip a trailing phone if present.
@@ -126,7 +145,7 @@ function looksLikeRealAddress(address) {
   const s = normalizeText(address);
   if (!s || s.length < 6) return false;
   const adminUnits = ['xã', 'phường', 'huyện', 'quận', 'tỉnh', 'thành phố', 'tp ', 'thị xã', 'thị trấn', 'thôn', 'ấp', 'khu phố'];
-  return adminUnits.some((k) => s.includes(k));
+  return includesVietnameseKeyword(address, adminUnits);
 }
 
 // Parse contact info out of a message: phone + address, with offline validity

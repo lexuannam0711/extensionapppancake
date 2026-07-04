@@ -152,6 +152,20 @@ async function getReviewQueue() {
   return data;
 }
 
+function normalizeAddressLookup(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const str = (x) => String(x == null ? '' : x).trim();
+  const googleMapsUrl = str(raw.googleMapsUrl);
+  if (!googleMapsUrl) return null;
+  return {
+    rawAddress: str(raw.rawAddress),
+    query: str(raw.query),
+    googleMapsUrl,
+    confidence: str(raw.confidence),
+    note: str(raw.note)
+  };
+}
+
 function normalizeQueueInput(raw) {
   const r = raw || {};
   const str = (x) => String(x == null ? '' : x).trim();
@@ -161,7 +175,8 @@ function normalizeQueueInput(raw) {
     intent: str(r.intent),
     reason: str(r.reason),
     pancakeUrl: str(r.pancakeUrl),
-    conversationId: str(r.conversationId)
+    conversationId: str(r.conversationId),
+    addressLookup: normalizeAddressLookup(r.addressLookup)
   };
 }
 
@@ -180,6 +195,7 @@ async function addOrUpdateReviewItem(entry) {
       existing.intent = input.intent;
       existing.reason = input.reason;
       existing.pancakeUrl = input.pancakeUrl;
+      existing.addressLookup = input.addressLookup || existing.addressLookup || null;
       existing.updatedAt = now;
       await writeJson('review-queue.json', { items: data.items });
       return { item: existing, updated: true };
@@ -194,6 +210,7 @@ async function addOrUpdateReviewItem(entry) {
     intent: input.intent,
     reason: input.reason,
     pancakeUrl: input.pancakeUrl,
+    addressLookup: input.addressLookup,
     status: 'pending',
     createdAt: now,
     updatedAt: now,

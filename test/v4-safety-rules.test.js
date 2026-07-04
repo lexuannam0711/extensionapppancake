@@ -56,6 +56,18 @@ test('v4 safety: address-only customer messages escalate as address detected', (
   assert.equal(contact.addressValid, true);
 });
 
+test('v4 safety: no-diacritic Vietnamese addresses are still detected', () => {
+  const message = 'ship ve phuong 3 quan 8 thanh pho ho chi minh';
+  const result = classifyMessage(message);
+  const contact = extractContactInfo(message);
+
+  assert.equal(result.intent, 'ADDRESS_DETECTED');
+  assert.equal(result.hasAddress, true);
+  assert.equal(detectAddress(message), true);
+  assert.equal(contact.address, 'phuong 3 quan 8 thanh pho ho chi minh');
+  assert.equal(contact.addressValid, true);
+});
+
 test('v4 safety: phone and address together are high buy intent', () => {
   const message = 'mình lấy 1 hộp, sđt 0912345678, địa chỉ phường 3 quận 8';
   const result = classifyMessage(message);

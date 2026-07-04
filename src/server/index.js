@@ -6,6 +6,7 @@ const { getSettings, saveSettings, getShortcuts, saveShortcuts, getLogs, appendL
 const { parseExcel, createTemplateBuffer } = require('./shortcutImporter');
 const { analyzeMessageWithAI, summarizeAIConfig, testAIConnection } = require('./ai');
 const { classifyMessage } = require('./rules');
+const { buildAddressLookup } = require('./addressLookup');
 const { findSimilarExamples } = require('./shortcutMatcher');
 const { isShortcut } = require('./validators');
 const telegram = require('./telegram');
@@ -284,6 +285,11 @@ function createApp() {
 
   app.post('/api/rules/classify', (req, res) => res.json(classifyMessage(req.body?.text || '')));
 
+  app.post('/api/address/lookup', (req, res) => {
+    const { message = '', customerName = '', phone = '' } = req.body || {};
+    res.json({ ok: true, lookup: buildAddressLookup({ message, customerName, phone }) });
+  });
+
   app.get('/api/logs', async (req, res) => {
     const logs = await getLogs();
     const limit = Math.min(Number(req.query.limit || 200), 800);
@@ -300,8 +306,8 @@ function createApp() {
   });
 
   app.post('/api/notify/buy', async (req, res) => {
-    const { customerName = '', phone = '', address = '', message = '' } = req.body || {};
-    const sent = await telegram.notifyBuyCustomer({ customerName, phone, address, message });
+    const { customerName = '', phone = '', address = '', message = '', addressLookup = null } = req.body || {};
+    const sent = await telegram.notifyBuyCustomer({ customerName, phone, address, message, addressLookup });
     res.json({ ok: true, telegramSent: sent });
   });
 

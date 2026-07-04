@@ -133,8 +133,8 @@ function decideBeforeSend({ lastSender } = {}) {
   };
 }
 
-function shouldRecordManualExample({ assistantEnabled, typedMessage } = {}) {
-  return Boolean(assistantEnabled || String(typedMessage || '').trim());
+function shouldRecordManualExample({ assistantEnabled } = {}) {
+  return Boolean(assistantEnabled);
 }
 
 const PDBBotDecision = {

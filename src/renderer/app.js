@@ -440,9 +440,8 @@ function renderShortcutPalette() {
   ).join('');
 }
 
-// Nguồn học cho thao tác dạy có chủ đích: ưu tiên ô test #aiMessage, sau đó
-// chỉ dùng tin khách thật khi Trợ lý gợi ý real-time đang bật. Khi trợ lý tắt,
-// bấm nút gợi ý/palette chỉ điền shortcut, không âm thầm lưu ví dụ từ hội thoại cũ.
+// Nguồn học cho thao tác dạy có chủ đích: chỉ dùng khi Trợ lý gợi ý
+// real-time đang bật. Ưu tiên ô test #aiMessage, sau đó dùng tin khách mới nhất.
 function resolveLearnSource({ allowAssistantContext = assistantEnabled } = {}) {
   const typed = ($('aiMessage')?.value || '').trim();
   if (typed) return typed;
@@ -454,7 +453,7 @@ function shouldRecordManualExample() {
   if (window.PDBBotDecision?.shouldRecordManualExample) {
     return window.PDBBotDecision.shouldRecordManualExample({ assistantEnabled, typedMessage });
   }
-  return Boolean(assistantEnabled || typedMessage.trim());
+  return Boolean(assistantEnabled);
 }
 
 async function fillShortcutIntoActiveTab(shortcut) {
@@ -465,8 +464,8 @@ async function fillShortcutIntoActiveTab(shortcut) {
   return botCallForTab(tab.id, 'setReplyText', shortcut.trim());
 }
 
-// Bấm nút bảng: điền mã vào Pancake (luôn nếu hợp lệ), chỉ học khi người dùng
-// nhập tin test hoặc đang bật Trợ lý gợi ý real-time. KHÔNG tự gửi.
+// Bấm nút bảng: điền mã vào Pancake (luôn nếu hợp lệ), chỉ học khi
+// Trợ lý gợi ý real-time đang bật. KHÔNG tự gửi.
 async function teachAndFill(shortcut) {
   if (!isShortcut(shortcut)) { toast('Shortcut không đúng định dạng'); return; }
   const result = await fillShortcutIntoActiveTab(shortcut);
@@ -874,7 +873,8 @@ async function enqueueReviewCase({ info, customerName, message, analysis, runtim
     customerMessage: message || '',
     intent: analysis?.intent || '',
     reason: analysis?.reason || 'Bot không tự tin / không hiểu',
-    pancakeUrl: hasValidUrl ? pancakeUrl : ''
+    pancakeUrl: hasValidUrl ? pancakeUrl : '',
+    addressLookup: analysis?.addressLookup || null
   };
   await postQueueWithRetry(body);
 }
@@ -978,6 +978,19 @@ async function processOneConversation(runtime = getActiveBotRuntime()) {
     if (!health.canMarkUnread) await log('WARN', 'BOT', prefixRuntime(runtime, `Fail-safe: DOM thiếu mark unread cho ${customerName || info.name}`), { message, health, postDecision });
     else await call('markCurrentConversationUnread');
     const ci = analysis.contactInfo || {};
+    let addressLookup = null;
+    if (ci.address) {
+      try {
+        const lookupResult = await api('/api/address/lookup', {
+          method: 'POST',
+          body: JSON.stringify({ customerName: customerName || info.name || '', phone: ci.phone, message })
+        });
+        addressLookup = lookupResult?.lookup || null;
+        analysis.addressLookup = addressLookup;
+      } catch (err) {
+        await log('WARN', 'BOT', prefixRuntime(runtime, 'Tra địa chỉ Google Maps: lỗi'), { message, error: err?.message || String(err) });
+      }
+    }
     const contactNote = [ci.phone ? `SĐT ${ci.phone}` : '', ci.address ? `ĐC: ${ci.address}` : ''].filter(Boolean).join(' | ');
     setRuntimeLastDecision(runtime, postDecision.action);
     await log('SUCCESS', 'BOT', prefixRuntime(runtime, `Khách mua hàng/escalate: ${customerName || info.name}${contactNote ? ' — ' + contactNote : ''}`), { message, analysis, postDecision });
@@ -985,7 +998,7 @@ async function processOneConversation(runtime = getActiveBotRuntime()) {
       try {
         const notifyResult = await api('/api/notify/buy', {
           method: 'POST',
-          body: JSON.stringify({ customerName: customerName || info.name || '', phone: ci.phone, address: ci.address, message })
+          body: JSON.stringify({ customerName: customerName || info.name || '', phone: ci.phone, address: ci.address, message, addressLookup })
         });
         await log(notifyResult?.telegramSent ? 'SUCCESS' : 'WARN', 'BOT', prefixRuntime(runtime, `Telegram thông báo khách mua hàng: ${notifyResult?.telegramSent ? 'đã gửi' : 'gửi thất bại'}`), { message, analysis, notifyResult });
       } catch (err) {
@@ -1454,10 +1467,20 @@ function renderReviewQueue(items) {
     const id = escapeHtml(item.id || '');
     const conv = escapeHtml(item.conversationId || '');
     const url = escapeHtml(item.pancakeUrl || '');
+    const lookup = item.addressLookup || null;
+    const mapsUrl = lookup?.googleMapsUrl ? escapeHtml(lookup.googleMapsUrl) : '';
+    const addressBlock = mapsUrl ? `
+      <div class="rq-address">
+        <div><b>Địa chỉ:</b> ${escapeHtml(lookup.rawAddress || lookup.query || '')}</div>
+        <div><b>Độ chắc chắn:</b> ${escapeHtml(lookup.confidence || 'medium')}</div>
+        ${lookup.note ? `<div>${escapeHtml(lookup.note)}</div>` : ''}
+        <a class="btn small ghost" href="${mapsUrl}" target="_blank" rel="noreferrer">Mở Google Maps</a>
+      </div>` : '';
     return `<li class="rq-item">
       <div class="rq-item-name">${name}</div>
       <div class="rq-item-msg">${msg}</div>
       <div class="rq-item-reason">${reason}</div>
+      ${addressBlock}
       <div class="rq-item-time">${when}</div>
       <div class="actions">
         <button class="btn small rq-open" data-id="${id}" data-conv="${conv}" data-url="${url}">Mở</button>

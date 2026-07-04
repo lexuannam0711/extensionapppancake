@@ -62,12 +62,14 @@ function notifyError(context, message) {
   return sendTelegram(`⚠️ <b>Lỗi server</b>\n${escapeHtml(context)}: ${escapeHtml(message)}`);
 }
 
-function notifyBuyCustomer({ customerName, phone, address, message }) {
+function notifyBuyCustomer({ customerName, phone, address, message, addressLookup }) {
   const lines = [
     '🛒 <b>Khách MUA HÀNG</b>',
     `👤 ${escapeHtml(customerName || 'Khách')}`,
     phone ? `📞 ${escapeHtml(phone)}` : '',
     address ? `📍 ${escapeHtml(address)}` : '',
+    addressLookup?.googleMapsUrl ? `🔎 Google Maps: ${escapeHtml(addressLookup.googleMapsUrl)}` : '',
+    addressLookup?.confidence ? `⚠️ Độ chắc chắn: ${escapeHtml(addressLookup.confidence)}` : '',
     message ? `💬 ${escapeHtml(message)}` : ''
   ].filter(Boolean);
   return sendTelegram(lines.join('\n'));
