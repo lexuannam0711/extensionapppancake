@@ -68,6 +68,37 @@ test('v4 safety: no-diacritic Vietnamese addresses are still detected', () => {
   assert.equal(contact.addressValid, true);
 });
 
+test('v4 safety: province abbreviations only count when paired with approved address markers', () => {
+  for (const message of [
+    'ship về hp bao lâu',
+    'gửi về hcm mất mấy ngày',
+    'phí ship về hn bao nhiêu',
+    'em đùa thôi gửi về sao cũng được',
+    'số nhà anh chưa biết',
+    'đường này khó đi không'
+  ]) {
+    const result = classifyMessage(message);
+    assert.notEqual(result.intent, 'ADDRESS_DETECTED', message);
+    assert.equal(result.hasAddress, false, message);
+    assert.equal(detectAddress(message), false, message);
+  }
+});
+
+test('v4 safety: strict Vietnamese administrative markers still detect addresses', () => {
+  for (const message of [
+    'xã an đồng huyện an dương hp',
+    'phường 3 hcm',
+    'thôn đông xã bình minh huyện thanh oai hn',
+    'địa chỉ xã bình minh huyện thanh oai hn',
+    'xã bình minh tỉnh thanh hóa'
+  ]) {
+    const result = classifyMessage(message);
+    assert.equal(result.intent, 'ADDRESS_DETECTED', message);
+    assert.equal(result.hasAddress, true, message);
+    assert.equal(detectAddress(message), true, message);
+  }
+});
+
 test('v4 safety: phone and address together are high buy intent', () => {
   const message = 'mình lấy 1 hộp, sđt 0912345678, địa chỉ phường 3 quận 8';
   const result = classifyMessage(message);

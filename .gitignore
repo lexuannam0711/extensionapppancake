@@ -30,3 +30,6 @@ Thumbs.db
 dist/
 build/
 .cache/
+
+# Archives / packaged builds
+*.zip

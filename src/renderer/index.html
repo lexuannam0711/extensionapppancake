@@ -146,7 +146,8 @@
             <button id="testAiBtn" class="btn ghost">Test AI</button>
           </div>
           <div id="aiConfigStatus" class="result-box">Chưa tải AI config</div>
-          <p class="hint icon-copy" style="margin-top:10px"><span data-icon="book"></span>AI đã học <b id="learnedCount">0</b> ví dụ từ shortcut bạn đã gửi. Càng dùng, gợi ý càng chính xác.</p>
+          <label class="toggle"><input id="learnExamplesEnabled" type="checkbox" checked /> <span>Tự học ví dụ mới</span></label>
+          <p class="hint icon-copy" style="margin-top:10px"><span data-icon="book"></span>AI đã học <b id="learnedCount">0</b> ví dụ từ shortcut bạn đã gửi. Tắt tự học để không lưu ví dụ mới; ví dụ cũ vẫn được dùng khi gợi ý.</p>
         </div>
         <div class="card">
           <div class="card-title-row"><h3 class="icon-heading"><span data-icon="book"></span>Ví dụ đã học</h3><button id="clearExamplesBtn" class="btn ghost small">Xóa hết</button></div>
@@ -222,6 +223,7 @@
   <div id="toast" class="toast hidden"></div>
   <script src="icons.js"></script>
   <script src="botDecision.js"></script>
+  <script src="conversationClaims.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

@@ -42,6 +42,7 @@ async function getSettings() {
     scanIntervalMs: 2500,
     autoClickEnabled: false,
     autoClickDelayMs: 3000,
+    learnExamplesEnabled: true,
     theme: 'light',
     aiBaseUrl: '',
     aiApiKey: '',

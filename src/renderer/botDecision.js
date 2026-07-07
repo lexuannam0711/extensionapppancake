@@ -9,16 +9,15 @@ function decideBeforeAnalysis({ info, lastSender, settings } = {}) {
   const shortcut = settings?.defaultNewCustomerShortcut || '/1';
 
   if (!hasTags) {
-    const adminAlreadyReplied = lastSender === 'admin';
     return {
       phase: 'PRE_ANALYSIS',
       hasTags,
-      action: adminAlreadyReplied ? 'NEW_CUSTOMER_TAGGED_ONLY_HUMAN_REPLY' : 'NEW_CUSTOMER',
+      action: 'NEW_CUSTOMER',
       tagName,
       shortcut,
       shouldApplyNewCustomerTag: true,
-      shouldFillShortcut: !adminAlreadyReplied,
-      shouldSendShortcut: !adminAlreadyReplied,
+      shouldFillShortcut: true,
+      shouldSendShortcut: true,
       shouldSkipAnalysis: true
     };
   }
@@ -133,8 +132,8 @@ function decideBeforeSend({ lastSender } = {}) {
   };
 }
 
-function shouldRecordManualExample({ assistantEnabled } = {}) {
-  return Boolean(assistantEnabled);
+function shouldRecordManualExample({ assistantEnabled, learnExamplesEnabled = true } = {}) {
+  return Boolean(assistantEnabled && learnExamplesEnabled);
 }
 
 const PDBBotDecision = {

@@ -163,6 +163,10 @@ function rememberProcessed(key, runtime = getActiveBotRuntime() || webviewTabs.b
   }
 }
 
+function rememberProcessedForAllBotRuntimes(key) {
+  forEachBotTab((tab) => rememberProcessed(key, tab.runtime));
+}
+
 function toast(message, ms = 2600) {
   const el = $('toast');
   el.textContent = message;
@@ -333,6 +337,7 @@ async function loadSettings() {
   $('botEnabled').checked = Boolean(settings.botEnabled);
   $('autoSend').checked = Boolean(settings.autoSend);
   $('shortcutOnlyMode').checked = settings.shortcutOnlyMode !== false;
+  if ($('learnExamplesEnabled')) $('learnExamplesEnabled').checked = settings.learnExamplesEnabled !== false;
   $('newCustomerShortcut').value = settings.defaultNewCustomerShortcut || '/1';
   $('newCustomerTag').value = settings.newCustomerTagName || 'Saruto Mới';
   $('buyTag').value = settings.buyTagName || 'Mua hàng';
@@ -353,7 +358,8 @@ async function saveSettingsFromUi() {
       buyTagName: $('buyTag').value.trim() || 'Mua hàng',
       minConfidence: Number($('minConfidence').value || 0.75),
       autoClickEnabled: Boolean(($('autoClickEnabled') && $('autoClickEnabled').checked) || anyRuntimeAutoClickRunning()),
-      autoClickDelayMs: Number(($('autoClickDelayMs') && $('autoClickDelayMs').value) || 3000)
+      autoClickDelayMs: Number(($('autoClickDelayMs') && $('autoClickDelayMs').value) || 3000),
+      learnExamplesEnabled: $('learnExamplesEnabled') ? $('learnExamplesEnabled').checked : true
     })
   });
   toast('Đã lưu settings');
@@ -450,10 +456,11 @@ function resolveLearnSource({ allowAssistantContext = assistantEnabled } = {}) {
 
 function shouldRecordManualExample() {
   const typedMessage = $('aiMessage')?.value || '';
+  const learnExamplesEnabled = settings.learnExamplesEnabled !== false;
   if (window.PDBBotDecision?.shouldRecordManualExample) {
-    return window.PDBBotDecision.shouldRecordManualExample({ assistantEnabled, typedMessage });
+    return window.PDBBotDecision.shouldRecordManualExample({ assistantEnabled, typedMessage, learnExamplesEnabled });
   }
-  return Boolean(assistantEnabled);
+  return Boolean(assistantEnabled && learnExamplesEnabled);
 }
 
 async function fillShortcutIntoActiveTab(shortcut) {
@@ -683,6 +690,7 @@ async function analyzeText(text) {
 
 // Learning: record a (message -> shortcut) example. Best-effort, never throws.
 async function recordExample(message, shortcut, intent = '') {
+  if (settings.learnExamplesEnabled === false) return;
   const msg = String(message || '').trim();
   if (!msg || !isShortcut(shortcut)) return;
   try {
@@ -797,7 +805,7 @@ async function fillShortcut(shortcut) {
   const result = await fillShortcutIntoActiveTab(shortcut);
   const source = shouldRecordManualExample() ? resolveLearnSource() : '';
   if (result.ok && source) {
-    // Điền từ vùng gợi ý chỉ học khi người dùng nhập tin test hoặc bật Trợ lý real-time.
+    // Điền từ vùng gợi ý chỉ học khi Trợ lý real-time và tự học ví dụ mới đều bật.
     try { await recordExample(source, shortcut.trim(), lastAnalysis?.intent || ''); }
     catch (_) { toast('Đã điền nhưng lưu ví dụ thất bại'); }
   }
@@ -886,15 +894,28 @@ async function processOneConversation(runtime = getActiveBotRuntime()) {
   if (runtime.tabId === activeWvTab) $('unreadCount').textContent = unread.length;
   if (!unread.length) return { ok: true, idle: true, message: 'Không có khách chưa đọc' };
 
-  const first = unread[0];
-  const key = first.id || `${first.name}-${first.snippet}`;
-  const last = runtime.processed.get(key);
-  if (last && Date.now() - last < 60000) {
-    await log('WARN', 'BOT', prefixRuntime(runtime, `Bỏ qua vì mới xử lý: ${first.name}`));
-    return { ok: true, skipped: true };
+  let first = null;
+  let key = '';
+  const claims = window.PDBConversationClaims;
+  for (const candidate of unread) {
+    const candidateKey = makeDedupeKey(candidate);
+    const last = runtime.processed.get(candidateKey);
+    if (last && Date.now() - last < PROCESSED_TTL_MS) {
+      await log('WARN', 'BOT', prefixRuntime(runtime, `Bỏ qua vì mới xử lý: ${candidate.name}`));
+      continue;
+    }
+    if (claims && !claims.claimConversation(candidateKey, runtime)) {
+      await log('WARN', 'BOT', prefixRuntime(runtime, `Bỏ qua vì bot khác đang xử lý: ${candidate.name}`));
+      continue;
+    }
+    first = candidate;
+    key = candidateKey;
+    break;
   }
-  rememberProcessed(key, runtime);
+  if (!first) return { ok: true, skipped: true, message: 'Không có khách chưa đọc khả dụng' };
+  rememberProcessedForAllBotRuntimes(key);
 
+  try {
   const info = await call('clickConversationById', first.id);
   await sleep(900);
   const customerName = await call('getCurrentCustomerName');
@@ -1046,6 +1067,9 @@ async function processOneConversation(runtime = getActiveBotRuntime()) {
     await log('INFO', 'BOT', prefixRuntime(runtime, `Đã điền ${postDecision.shortcut}, chờ duyệt`), { message, analysis, postDecision });
   }
   return { ok: true, action: 'SHORTCUT', analysis };
+  } finally {
+    if (claims && key) claims.releaseConversationClaim(key, runtime);
+  }
 }
 
 // Xử lý MỘT khách theo chế độ Auto Click (tốc độ cao, KHÔNG gọi AI).

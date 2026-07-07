@@ -32,7 +32,7 @@ function buildGoogleMapsSearchUrl(query) {
 
 function resolveConfidence(rawAddress, addressValid) {
   const s = String(rawAddress || '').toLowerCase();
-  const units = ['xã', 'phường', 'huyện', 'quận', 'tỉnh', 'thành phố', 'thị xã', 'thị trấn'];
+  const units = ['thôn', 'xã', 'phường', 'huyện', 'tỉnh', 'thành phố'];
   const unitHits = units.filter((unit) => s.includes(unit)).length;
   if (addressValid && unitHits >= 2) return 'high';
   if (addressValid || unitHits >= 1) return 'medium';

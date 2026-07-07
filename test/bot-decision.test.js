@@ -33,19 +33,19 @@ test('bot decision: no-tag customer with customer last message gets new-customer
   assert.equal(decision.shouldSkipAnalysis, true);
 });
 
-test('bot decision: no-tag customer with admin last message gets tagged only without shortcut send', () => {
+test('bot decision: no-tag customer with admin last message still gets new-customer shortcut send', () => {
   const decision = decideBeforeAnalysis({
     info: { hasTags: false, tags: [] },
     lastSender: 'admin',
     settings: { newCustomerTagName: 'Saruto Mới', defaultNewCustomerShortcut: '/1' }
   });
 
-  assert.equal(decision.action, 'NEW_CUSTOMER_TAGGED_ONLY_HUMAN_REPLY');
+  assert.equal(decision.action, 'NEW_CUSTOMER');
   assert.equal(decision.tagName, 'Saruto Mới');
   assert.equal(decision.shortcut, '/1');
   assert.equal(decision.shouldApplyNewCustomerTag, true);
-  assert.equal(decision.shouldFillShortcut, false);
-  assert.equal(decision.shouldSendShortcut, false);
+  assert.equal(decision.shouldFillShortcut, true);
+  assert.equal(decision.shouldSendShortcut, true);
   assert.equal(decision.shouldSkipAnalysis, true);
 });
 
@@ -185,10 +185,10 @@ test('bot decision: final send guard allows customer-last sends', () => {
   assert.equal(decision.shouldRecordExample, true);
 });
 
-test('bot decision: manual fill only records examples when assistant is on', () => {
-  assert.equal(PDBBotDecision.shouldRecordManualExample({ assistantEnabled: false, typedMessage: '' }), false);
-  assert.equal(PDBBotDecision.shouldRecordManualExample({ assistantEnabled: false, typedMessage: '   ' }), false);
-  assert.equal(PDBBotDecision.shouldRecordManualExample({ assistantEnabled: false, typedMessage: 'giá bao nhiêu' }), false);
-  assert.equal(PDBBotDecision.shouldRecordManualExample({ assistantEnabled: true, typedMessage: '' }), true);
-  assert.equal(PDBBotDecision.shouldRecordManualExample({ assistantEnabled: true, typedMessage: 'giá bao nhiêu' }), true);
+test('bot decision: manual fill only records examples when assistant and learning are on', () => {
+  assert.equal(PDBBotDecision.shouldRecordManualExample({ assistantEnabled: false, learnExamplesEnabled: true, typedMessage: '' }), false);
+  assert.equal(PDBBotDecision.shouldRecordManualExample({ assistantEnabled: false, learnExamplesEnabled: true, typedMessage: 'giá bao nhiêu' }), false);
+  assert.equal(PDBBotDecision.shouldRecordManualExample({ assistantEnabled: true, learnExamplesEnabled: false, typedMessage: 'giá bao nhiêu' }), false);
+  assert.equal(PDBBotDecision.shouldRecordManualExample({ assistantEnabled: true, learnExamplesEnabled: true, typedMessage: '' }), true);
+  assert.equal(PDBBotDecision.shouldRecordManualExample({ assistantEnabled: true, learnExamplesEnabled: true, typedMessage: 'giá bao nhiêu' }), true);
 });
