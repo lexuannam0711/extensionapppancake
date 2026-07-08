@@ -94,9 +94,11 @@
           <label class="toggle"><input id="botEnabled" type="checkbox" /> <span>Bật bot loop</span></label>
           <label class="toggle"><input id="autoSend" type="checkbox" /> <span>Auto Send shortcut</span></label>
           <label class="toggle"><input id="shortcutOnlyMode" type="checkbox" checked /> <span>Chỉ cho gửi /n</span></label>
+          <label class="toggle"><input id="buyTtsEnabled" type="checkbox" checked /> <span>Đọc loa khi có khách mua hàng</span></label>
           <div class="form-row"><label>Shortcut khách mới</label><input id="newCustomerShortcut" value="/1" /></div>
           <div class="form-row"><label>Tag khách mới</label><input id="newCustomerTag" value="Saruto Mới" /></div>
           <div class="form-row"><label>Tag mua hàng</label><input id="buyTag" value="Mua hàng" /></div>
+          <div class="form-row"><label>Gộp đọc loa (ms)</label><input id="buyTtsDebounceMs" type="number" min="300" step="100" value="1500" /></div>
           <div class="form-row"><label>Confidence auto send</label><input id="minConfidence" type="number" min="0" max="1" step="0.05" value="0.75" /></div>
           <div class="actions">
             <button id="saveSettingsBtn" class="btn">Lưu settings</button>
@@ -224,6 +226,7 @@
   <script src="icons.js"></script>
   <script src="botDecision.js"></script>
   <script src="conversationClaims.js"></script>
+  <script src="buyTtsNotifier.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

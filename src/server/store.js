@@ -28,26 +28,32 @@ async function writeJson(file, data) {
   return data;
 }
 
+const DEFAULT_SETTINGS = {
+  botEnabled: false,
+  autoSend: false,
+  shortcutOnlyMode: true,
+  minConfidence: 0.75,
+  defaultNewCustomerShortcut: '/1',
+  newCustomerTagName: 'Saruto Mới',
+  buyTagName: 'Mua hàng',
+  buyTtsEnabled: true,
+  buyTtsDebounceMs: 1500,
+  allowShortcutAfterBuyIntent: false,
+  processDelayMs: 3000,
+  scanIntervalMs: 2500,
+  autoClickEnabled: false,
+  autoClickDelayMs: 3000,
+  learnExamplesEnabled: true,
+  theme: 'light',
+  aiBaseUrl: '',
+  aiApiKey: '',
+  aiModel: ''
+};
+
 async function getSettings() {
-  return readJson('settings.json', {
-    botEnabled: false,
-    autoSend: false,
-    shortcutOnlyMode: true,
-    minConfidence: 0.75,
-    defaultNewCustomerShortcut: '/1',
-    newCustomerTagName: 'Saruto Mới',
-    buyTagName: 'Mua hàng',
-    allowShortcutAfterBuyIntent: false,
-    processDelayMs: 3000,
-    scanIntervalMs: 2500,
-    autoClickEnabled: false,
-    autoClickDelayMs: 3000,
-    learnExamplesEnabled: true,
-    theme: 'light',
-    aiBaseUrl: '',
-    aiApiKey: '',
-    aiModel: ''
-  });
+  const settings = await readJson('settings.json', DEFAULT_SETTINGS);
+  const savedSettings = settings && typeof settings === 'object' && !Array.isArray(settings) ? settings : {};
+  return { ...DEFAULT_SETTINGS, ...savedSettings };
 }
 
 async function saveSettings(patch) {

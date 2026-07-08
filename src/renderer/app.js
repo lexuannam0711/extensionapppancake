@@ -337,6 +337,8 @@ async function loadSettings() {
   $('botEnabled').checked = Boolean(settings.botEnabled);
   $('autoSend').checked = Boolean(settings.autoSend);
   $('shortcutOnlyMode').checked = settings.shortcutOnlyMode !== false;
+  if ($('buyTtsEnabled')) $('buyTtsEnabled').checked = settings.buyTtsEnabled !== false;
+  if ($('buyTtsDebounceMs')) $('buyTtsDebounceMs').value = settings.buyTtsDebounceMs || 1500;
   if ($('learnExamplesEnabled')) $('learnExamplesEnabled').checked = settings.learnExamplesEnabled !== false;
   $('newCustomerShortcut').value = settings.defaultNewCustomerShortcut || '/1';
   $('newCustomerTag').value = settings.newCustomerTagName || 'Saruto Mới';
@@ -347,6 +349,13 @@ async function loadSettings() {
 }
 
 async function saveSettingsFromUi() {
+  const buyTtsDebounceInput = $('buyTtsDebounceMs');
+  const parsedBuyTtsDebounceMs = Number((buyTtsDebounceInput && buyTtsDebounceInput.value) || 1500);
+  const buyTtsDebounceMs = Number.isFinite(parsedBuyTtsDebounceMs) && parsedBuyTtsDebounceMs >= 300
+    ? parsedBuyTtsDebounceMs
+    : 1500;
+  if (buyTtsDebounceInput) buyTtsDebounceInput.value = buyTtsDebounceMs;
+
   settings = await api('/api/settings', {
     method: 'POST',
     body: JSON.stringify({
@@ -356,6 +365,8 @@ async function saveSettingsFromUi() {
       defaultNewCustomerShortcut: $('newCustomerShortcut').value.trim() || '/1',
       newCustomerTagName: $('newCustomerTag').value.trim() || 'Saruto Mới',
       buyTagName: $('buyTag').value.trim() || 'Mua hàng',
+      buyTtsEnabled: $('buyTtsEnabled') ? $('buyTtsEnabled').checked : true,
+      buyTtsDebounceMs,
       minConfidence: Number($('minConfidence').value || 0.75),
       autoClickEnabled: Boolean(($('autoClickEnabled') && $('autoClickEnabled').checked) || anyRuntimeAutoClickRunning()),
       autoClickDelayMs: Number(($('autoClickDelayMs') && $('autoClickDelayMs').value) || 3000),
@@ -1015,6 +1026,18 @@ async function processOneConversation(runtime = getActiveBotRuntime()) {
     const contactNote = [ci.phone ? `SĐT ${ci.phone}` : '', ci.address ? `ĐC: ${ci.address}` : ''].filter(Boolean).join(' | ');
     setRuntimeLastDecision(runtime, postDecision.action);
     await log('SUCCESS', 'BOT', prefixRuntime(runtime, `Khách mua hàng/escalate: ${customerName || info.name}${contactNote ? ' — ' + contactNote : ''}`), { message, analysis, postDecision });
+    try {
+      if (window.PDBBuyTtsNotifier) {
+        window.PDBBuyTtsNotifier.notifyBuyCustomer({
+          customerName: customerName || info.name || '',
+          phone: ci.phone || '',
+          address: ci.address || '',
+          message,
+          tabId: runtime.tabId,
+          conversationId: info.id || info.conversationId || ''
+        }, settings);
+      }
+    } catch (_) {}
     if (postDecision.shouldNotifyBuy) {
       try {
         const notifyResult = await api('/api/notify/buy', {
