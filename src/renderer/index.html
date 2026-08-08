@@ -16,9 +16,17 @@
           <button class="browser-tab" data-wvtab="bot2" aria-label="Tab Bot 2">Bot 2</button>
           <button class="browser-tab" data-wvtab="manual" aria-label="Tab thủ công">Tab 3</button>
         </div>
-        <input id="urlInput" class="url-input" placeholder="https://pages.fm/" />
+        <input id="urlInput" class="url-input" placeholder="https://pancake.vn/multi_pages" />
         <button id="goBtn" class="btn small icon-btn" aria-label="Mở URL" data-icon="arrow-right"></button>
         <button id="reloadBtn" class="btn small ghost icon-btn" aria-label="Reload" data-icon="refresh"></button>
+        <button id="pancakeLoginBtn" class="btn small ghost" aria-label="Mở trang đăng nhập" hidden>Đăng nhập</button>
+        <div id="accountAuth" class="account-auth" hidden>
+          <input id="accountEmail" type="email" autocomplete="username" placeholder="Operator email" aria-label="Operator email" />
+          <input id="accountPassword" type="password" autocomplete="current-password" placeholder="Password" aria-label="Password" />
+          <button id="authLoginBtn" class="btn small ghost" type="button">Sign in</button>
+          <button id="authLogoutBtn" class="btn small ghost" type="button" hidden>Sign out</button>
+          <span id="authStatus" class="status muted" role="status">Not configured</span>
+        </div>
         <button id="themeBtn" class="btn small ghost icon-btn" aria-label="Chuyển sáng/tối" data-icon="moon"></button>
         <span id="webviewStatus" class="status muted" style="font-size:9px;max-width:80px;overflow:hidden;text-overflow:ellipsis"></span>
       </div>
@@ -176,6 +184,9 @@
         <div class="card">
           <h3>DOM Test</h3>
           <div class="actions wrap">
+            <button class="btn ghost" data-open-devtools="main">DevTools App</button>
+            <button class="btn ghost" data-open-devtools="bot1">DevTools Bot 1</button>
+            <button class="btn ghost" data-open-devtools="bot2">DevTools Bot 2</button>
             <button class="btn ghost" data-domtest="status">Test trạng thái</button>
             <button class="btn ghost" data-domtest="unread">Tìm khách chưa đọc</button>
             <button class="btn ghost" data-domtest="fill1">Nhập /1</button>
@@ -185,6 +196,7 @@
             <button class="btn ghost" data-domtest="markUnread">Mark unread</button>
             <button class="btn ghost" data-domtest="recentMsgs">Đọc 5 tin gần nhất</button>
             <button class="btn ghost" data-domtest="orderStatus">Trạng thái đơn</button>
+            <button class="btn ghost" data-domtest="openOrders">Mở đơn hàng</button>
           </div>
           <pre id="domTestResult" class="pre">Chưa test</pre>
         </div>
@@ -226,7 +238,14 @@
   <script src="icons.js"></script>
   <script src="botDecision.js"></script>
   <script src="conversationClaims.js"></script>
+  <script src="conversationProcessing.js"></script>
   <script src="buyTtsNotifier.js"></script>
+  <script src="pancakeUrlPolicy.js"></script>
+  <script src="pancakeDom.js"></script>
+  <script src="pancakeAutomationGate.js"></script>
+  <script src="pancakeAutomationPayload.js"></script>
+  <script src="webviewAutomation.js"></script>
+  <script src="webviewTabNavigation.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

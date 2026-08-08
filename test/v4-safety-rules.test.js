@@ -40,11 +40,13 @@ test('v4 safety: phone-only customer messages escalate as phone detected', () =>
   assert.equal(result.intent, 'PHONE_DETECTED');
   assert.equal(result.hasPhone, true);
   assert.equal(result.hasAddress, false);
+  assert.equal(result.addressRole, 'NONE');
+  assert.equal(result.contactState, 'PHONE_ONLY');
   assert.equal(contact.phone, '0912345678');
   assert.equal(contact.phoneValid, true);
 });
 
-test('v4 safety: address-only customer messages escalate as address detected', () => {
+test('v4 safety: complete address-only customer messages request phone', () => {
   const message = 'ship về phường 3 quận 8 thành phố hồ chí minh';
   const result = classifyMessage(message);
   const contact = extractContactInfo(message);
@@ -52,6 +54,8 @@ test('v4 safety: address-only customer messages escalate as address detected', (
   assert.equal(result.intent, 'ADDRESS_DETECTED');
   assert.equal(result.hasPhone, false);
   assert.equal(result.hasAddress, true);
+  assert.equal(result.addressRole, 'CUSTOMER_ADDRESS');
+  assert.equal(result.contactState, 'ADDRESS_ONLY');
   assert.equal(detectAddress(message), true);
   assert.equal(contact.addressValid, true);
 });
@@ -63,6 +67,7 @@ test('v4 safety: no-diacritic Vietnamese addresses are still detected', () => {
 
   assert.equal(result.intent, 'ADDRESS_DETECTED');
   assert.equal(result.hasAddress, true);
+  assert.equal(result.contactState, 'ADDRESS_ONLY');
   assert.equal(detectAddress(message), true);
   assert.equal(contact.address, 'phuong 3 quan 8 thanh pho ho chi minh');
   assert.equal(contact.addressValid, true);
@@ -84,30 +89,96 @@ test('v4 safety: province abbreviations only count when paired with approved add
   }
 });
 
-test('v4 safety: strict Vietnamese administrative markers still detect addresses', () => {
+test('v4 safety: complete address requires ward, district, and province levels', () => {
+  const complete = classifyMessage('thôn đông xã bình minh huyện thanh oai hn');
+  assert.equal(complete.intent, 'ADDRESS_DETECTED');
+  assert.equal(complete.hasAddress, true);
+  assert.equal(complete.contactState, 'ADDRESS_ONLY');
+
   for (const message of [
-    'xã an đồng huyện an dương hp',
     'phường 3 hcm',
-    'thôn đông xã bình minh huyện thanh oai hn',
-    'địa chỉ xã bình minh huyện thanh oai hn',
-    'xã bình minh tỉnh thanh hóa'
+    'xã bình minh tỉnh thanh hóa',
+    'địa chỉ 12 nguyễn trãi'
   ]) {
     const result = classifyMessage(message);
-    assert.equal(result.intent, 'ADDRESS_DETECTED', message);
+    assert.equal(result.intent, 'ADDRESS_INCOMPLETE', message);
     assert.equal(result.hasAddress, true, message);
-    assert.equal(detectAddress(message), true, message);
+    assert.equal(result.contactState, 'INCOMPLETE_ADDRESS', message);
+    assert.equal(extractContactInfo(message).addressValid, false, message);
   }
 });
 
 test('v4 safety: phone and address together are high buy intent', () => {
-  const message = 'mình lấy 1 hộp, sđt 0912345678, địa chỉ phường 3 quận 8';
+  const message = 'mình lấy 1 hộp, sđt 0912345678, địa chỉ phường 3 quận 8 TPHCM';
   const result = classifyMessage(message);
   const contact = extractContactInfo(message);
 
   assert.equal(result.intent, 'BUY_INTENT_HIGH');
   assert.equal(result.hasPhone, true);
   assert.equal(result.hasAddress, true);
+  assert.equal(result.contactState, 'COMPLETE');
   assert.equal(contact.hasContact, true);
+});
+
+test('v4 safety: store location questions are not customer addresses', () => {
+  for (const message of [
+    'xin địa chỉ nhà thuốc',
+    'nhà thuốc ở đâu',
+    'cho anh vị trí',
+    'gửi map',
+    'anh qua mua trực tiếp ở đâu',
+    'ben em o cho nao'
+  ]) {
+    const result = classifyMessage(message);
+    assert.equal(result.intent, 'STORE_LOCATION_QUESTION', message);
+    assert.equal(result.addressRole, 'STORE_LOCATION_REQUEST', message);
+    assert.equal(result.contactState, 'NONE', message);
+    assert.equal(result.hasAddress, false, message);
+  }
+});
+
+test('v4 safety: customer address containing shop is still customer contact', () => {
+  const result = classifyMessage('shop ơi, địa chỉ của em là phường 3 quận 8 TPHCM');
+
+  assert.equal(result.intent, 'ADDRESS_DETECTED');
+  assert.equal(result.addressRole, 'CUSTOMER_ADDRESS');
+  assert.equal(result.contactState, 'ADDRESS_ONLY');
+});
+
+test('v4 safety: polite store location request is not treated as refusal', () => {
+  const result = classifyMessage('cho em xin địa chỉ nhà thuốc, cảm ơn shop');
+
+  assert.equal(result.intent, 'STORE_LOCATION_QUESTION');
+  assert.equal(result.addressRole, 'STORE_LOCATION_REQUEST');
+});
+
+test('v4 safety: administrative marker list is not a complete address', () => {
+  const result = classifyMessage('sđt 0912345678, cần cung cấp xã phường huyện quận tỉnh đầy đủ');
+
+  assert.equal(result.intent, 'ADDRESS_INCOMPLETE');
+  assert.equal(result.contactState, 'INCOMPLETE_ADDRESS');
+});
+
+test('v4 safety: direct-administered city names satisfy province level', () => {
+  const result = classifyMessage('phường 3 quận 8 Hà Nội');
+
+  assert.equal(result.intent, 'ADDRESS_DETECTED');
+  assert.equal(result.contactState, 'ADDRESS_ONLY');
+});
+
+test('v4 safety: delivery questions stay shipping even with three location levels', () => {
+  const result = classifyMessage('shop có giao về xã X huyện Y tỉnh Z không?');
+
+  assert.equal(result.intent, 'SHIPPING_QUESTION');
+  assert.equal(result.addressRole, 'DELIVERY_QUESTION');
+  assert.notEqual(result.contactState, 'COMPLETE');
+});
+
+test('v4 safety: phone plus incomplete address never becomes high buy intent', () => {
+  const result = classifyMessage('sđt 0912345678, địa chỉ phường 3 quận 8');
+
+  assert.equal(result.intent, 'ADDRESS_INCOMPLETE');
+  assert.equal(result.contactState, 'INCOMPLETE_ADDRESS');
 });
 
 test('v4 safety: vague numeric messages are not treated as phone or address', () => {

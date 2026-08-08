@@ -154,11 +154,17 @@ body { margin: 0; background: var(--bg); color: var(--text); overflow: hidden; -
   background: var(--input-soft-bg);
   border-color: transparent;
 }
-.pancake-view { flex: 1; width: 100%; height: calc(100dvh - 30px); }
+.browser-pane { position: relative; }
+.pancake-view {
+  position: absolute;
+  inset: 30px 0 0;
+  width: 100%;
+  height: calc(100dvh - 30px);
+}
 
 /* Webview tab switching */
-.wv-active, .pancake-view.wv-active { display: flex; }
-.wv-hidden, .pancake-view.wv-hidden { display: none; }
+.wv-active, .pancake-view.wv-active { opacity: 1; z-index: 2; pointer-events: auto; }
+.wv-hidden, .pancake-view.wv-hidden { opacity: 0; z-index: 1; pointer-events: none; }
 
 /* Browser tab bar — segmented control */
 .browser-tabs-bar { display: flex; gap: 2px; background: var(--seg-bg); padding: 2px; border-radius: 7px; }
@@ -189,6 +195,9 @@ body { margin: 0; background: var(--bg); color: var(--text); overflow: hidden; -
 }
 
 /* Toolbar action buttons */
+.account-auth { display: flex; align-items: center; gap: 4px; min-width: 0; }
+.account-auth input { width: 128px; height: 22px; padding: 3px 6px; font-size: 11px; }
+.account-auth .status { max-width: 92px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .browser-toolbar .btn.small {
   width: 24px;
   height: 24px;

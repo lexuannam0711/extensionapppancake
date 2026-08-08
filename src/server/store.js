@@ -1,12 +1,32 @@
 const fs = require('fs/promises');
 const path = require('path');
+const { migrateData } = require('./dataMigration');
 
-const ROOT = path.resolve(__dirname, '../../server/data');
-const UPLOADS = path.resolve(__dirname, '../../uploads');
+const LEGACY_ROOT = path.resolve(__dirname, '../../server/data');
+let ROOT = path.resolve(process.env.PANCAKE_DATA_DIR || LEGACY_ROOT);
+let UPLOADS = path.resolve(process.env.PANCAKE_UPLOADS_DIR || path.resolve(__dirname, '../../uploads'));
+let LEGACY_SOURCE = LEGACY_ROOT;
+const LEGACY_UPLOADS = path.resolve(__dirname, '../../uploads');
+let initializationPromise = null;
+let writeQueue = Promise.resolve();
+
+function configureStorePaths({ dataRoot, uploadsRoot, legacyRoot } = {}) {
+  ROOT = path.resolve(dataRoot || process.env.PANCAKE_DATA_DIR || LEGACY_ROOT);
+  UPLOADS = path.resolve(uploadsRoot || process.env.PANCAKE_UPLOADS_DIR || path.resolve(__dirname, '../../uploads'));
+  LEGACY_SOURCE = path.resolve(legacyRoot || LEGACY_ROOT);
+  initializationPromise = null;
+  return { dataRoot: ROOT, uploadsRoot: UPLOADS };
+}
 
 async function ensureDirs() {
-  await fs.mkdir(ROOT, { recursive: true });
-  await fs.mkdir(UPLOADS, { recursive: true });
+  if (!initializationPromise) {
+    initializationPromise = (async () => {
+      await fs.mkdir(ROOT, { recursive: true });
+      await fs.mkdir(UPLOADS, { recursive: true });
+      await migrateData({ dataRoot: ROOT, legacyRoot: LEGACY_SOURCE, uploadsRoot: UPLOADS, legacyUploadsRoot: LEGACY_UPLOADS });
+    })();
+  }
+  return initializationPromise;
 }
 
 async function readJson(file, fallback) {
@@ -16,18 +36,34 @@ async function readJson(file, fallback) {
     const raw = await fs.readFile(filePath, 'utf8');
     return JSON.parse(raw);
   } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
     await writeJson(file, fallback);
     return fallback;
   }
 }
 
-async function writeJson(file, data) {
-  await ensureDirs();
-  const filePath = path.join(ROOT, file);
-  await fs.writeFile(filePath, JSON.stringify(data, null, 2), 'utf8');
-  return data;
+function writeJson(file, data) {
+  const operation = writeQueue.catch(() => {}).then(async () => {
+    await ensureDirs();
+    const filePath = path.join(ROOT, file);
+    const temporaryPath = `${filePath}.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`;
+    const backupPath = `${filePath}.bak`;
+    await fs.writeFile(temporaryPath, JSON.stringify(data, null, 2), { encoding: 'utf8', mode: 0o600, flag: 'wx' });
+    try {
+      await fs.copyFile(filePath, backupPath).catch((error) => { if (error.code !== 'ENOENT') throw error; });
+      await fs.rename(temporaryPath, filePath);
+    } catch (error) {
+      if (error.code !== 'EEXIST' && error.code !== 'EPERM') throw error;
+      await fs.rm(filePath, { force: true });
+      await fs.rename(temporaryPath, filePath);
+    } finally {
+      await fs.rm(temporaryPath, { force: true }).catch(() => {});
+    }
+    return data;
+  });
+  writeQueue = operation.catch(() => {});
+  return operation;
 }
-
 const DEFAULT_SETTINGS = {
   botEnabled: false,
   autoSend: false,
@@ -261,8 +297,9 @@ async function clearDoneReviewItems() {
 }
 
 module.exports = {
-  ROOT,
-  UPLOADS,
+  get ROOT() { return ROOT; },
+  get UPLOADS() { return UPLOADS; },
+  configureStorePaths,
   ensureDirs,
   readJson,
   writeJson,

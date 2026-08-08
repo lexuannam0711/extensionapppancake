@@ -9,15 +9,89 @@ function foldVietnameseText(text) {
     .replace(/đ/g, 'd');
 }
 
+const MAX_CUSTOMER_TAGS = 50;
+const MAX_CUSTOMER_TAG_LENGTH = 100;
+
+function normalizeVietnameseText(text) {
+  return String(text || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/đ/gi, 'd')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function sanitizeCustomerTags(tags) {
+  if (!Array.isArray(tags)) return [];
+  return tags
+    .slice(0, MAX_CUSTOMER_TAGS)
+    .filter((tag) => typeof tag === 'string')
+    .map((tag) => tag.trim().slice(0, MAX_CUSTOMER_TAG_LENGTH))
+    .filter(Boolean);
+}
+
+function getEligibleReturningCustomerTags(tags) {
+  return sanitizeCustomerTags(tags).filter((tag) => {
+    const normalized = normalizeVietnameseText(tag);
+    return normalized.startsWith('nhan saruto') ||
+      normalized.startsWith('da nhan') ||
+      normalized.includes('trong');
+  });
+}
+
+function includesNormalizedPhrase(text, phrase) {
+  return ` ${text} `.includes(` ${phrase} `);
+}
+
+function getRepurchaseBlocker(text, { ignoreCourtesy = false } = {}) {
+  const normalized = normalizeVietnameseText(text).replace(/[^a-z0-9]+/g, ' ').trim();
+  const complaintMarkers = [
+    'khieu nai', 'lua', 'hoan tien', 'khong nhan', 'hang sai', 'sai hang',
+    'hang loi', 'bi loi', 'te', 'buc', 'chui'
+  ];
+  if (complaintMarkers.some((marker) => includesNormalizedPhrase(normalized, marker))) return 'COMPLAINT';
+
+  const refusalMarkers = [
+    'khong mua', 'khong lay', 'khong can', 'khong dat', 'chua mua',
+    'de sau', 'huy', 'dung gui', 'dung ship', 'thoi', 'suy nghi'
+  ];
+  if (refusalMarkers.some((marker) => includesNormalizedPhrase(normalized, marker))) return 'REFUSAL';
+  return !ignoreCourtesy && includesNormalizedPhrase(normalized, 'cam on') ? 'REFUSAL' : null;
+}
+
+function detectExplicitRepurchase(text) {
+  if (getRepurchaseBlocker(text, { ignoreCourtesy: true })) return false;
+  const normalized = normalizeVietnameseText(text).replace(/[^a-z0-9]+/g, ' ').trim();
+  if (!normalized) return false;
+
+  const shortConfirmation = /^(?:ok|oke|oki|okay)(?:\s+(?:em|nhe))?$/.test(normalized);
+  const verbThenRepeat = /\b(?:mua|lay|gui|ship|giao|dat)(?:\s+[a-z0-9]+){0,4}\s+(?:lai|them|nua|tiep)\b/;
+  const repeatThenVerb = /\b(?:lai|them|nua|tiep)(?:\s+[a-z0-9]+){0,4}\s+(?:mua|lay|gui|ship|giao|dat)\b/;
+  const hasQuantityAndUnit = /\b(?:\d{1,3}|mot|hai|ba|bon|tu|nam|sau|bay|tam|chin|muoi)\s*(?:hop|lo|chai|goi|bo)\b/.test(normalized);
+  const directQuantityOrder = /\bcho(?:\s+(?:chi|anh|em|toi|minh)){0,2}\s+(?:\d{1,3}|mot|hai|ba|bon|tu|nam|sau|bay|tam|chin|muoi)\s*(?:hop|lo|chai|goi|bo)(?:\s+(?:nua|nhe|di))?$/.test(normalized);
+  const quantityRequest = hasQuantityAndUnit && (
+    /\b(?:mua|lay|gui|ship|giao|dat)\b/.test(normalized) ||
+    /\b(?:them|nua|tiep)\b/.test(normalized)
+  ) || directQuantityOrder;
+  const oldAddress = /\b(?:giao|gui|ship)\b/.test(normalized) &&
+    /\b(?:dia chi|cho|noi)\s+cu\b/.test(normalized);
+  const agreedSend = /^(?:(?:u|uh|vang|duoc)(?:\s+em)?|(?:em|e))\s+(?:gui|ship|giao)\s+di$/.test(normalized);
+
+  return shortConfirmation || verbThenRepeat.test(normalized) || repeatThenVerb.test(normalized) ||
+    quantityRequest || oldAddress || agreedSend;
+}
+
 function includesVietnameseKeyword(text, keywords) {
   const normalized = normalizeText(text);
   const folded = foldVietnameseText(text);
   return keywords.some((keyword) => normalized.includes(keyword) || folded.includes(foldVietnameseText(keyword)));
 }
 
-const ADDRESS_MAIN_MARKERS = ['thôn', 'xã', 'phường', 'huyện', 'tỉnh', 'thành phố'];
+const ADDRESS_MAIN_MARKERS = ['thôn', 'xã', 'phường', 'thị trấn', 'huyện', 'quận', 'thị xã', 'tỉnh', 'thành phố'];
 const ADDRESS_EXPLICIT_MARKERS = ['địa chỉ', 'đ/c', 'đc '];
 const ADDRESS_CITY_ABBREVIATIONS = ['hn', 'hcm', 'tphcm', 'sg', 'hp'];
+const CENTRAL_CITY_NAMES = ['ha noi', 'ho chi minh', 'hai phong', 'da nang', 'can tho'];
 
 function escapeRegex(text) {
   return String(text).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -34,6 +108,35 @@ function getMainAddressMarkerHits(text) {
 
 function hasExplicitAddressMarker(text) {
   return includesVietnameseKeyword(text, ADDRESS_EXPLICIT_MARKERS);
+}
+
+function detectStoreLocationRequest(text) {
+  const s = normalizeVietnameseText(stripUrls(text)).replace(/[^a-z0-9]+/g, ' ').trim();
+  const locationCue = /\b(?:dia chi|vi tri|map|o dau|cho nao|noi ban|qua mua truc tiep)\b/.test(s);
+  const storeCue = /\b(?:shop|nha thuoc|quay thuoc|cua hang|cong ty|cty|ben em)\b/.test(s);
+  const requestCue = /\b(?:xin|cho|gui|o dau|cho nao|qua mua truc tiep)\b/.test(s);
+  const customerSupply = /\bdia chi cua (?:em|anh|chi|minh)\b/.test(s) || hasCompleteAdministrativeAddress(text);
+  return !customerSupply && locationCue && requestCue &&
+    (storeCue || /\b(?:vi tri|map|o dau|cho nao|qua mua truc tiep)\b/.test(s));
+}
+
+function detectAddressMention(text) {
+  const raw = stripUrls(text);
+  const s = normalizeVietnameseText(raw).replace(/[^a-z0-9]+/g, ' ').trim();
+  if (/\b(?:chua gui|khong co|chua co)\s+dia chi\b/.test(s)) return false;
+  return hasExplicitAddressMarker(raw) || getMainAddressMarkerHits(raw).length > 0;
+}
+
+function hasCompleteAdministrativeAddress(text) {
+  const s = normalizeVietnameseText(stripUrls(text)).replace(/[^a-z0-9]+/g, ' ').trim();
+  if (!s) return false;
+  const markerValue = '(?!(?:xa|phuong|thi tran|huyen|quan|thi xa|tinh|thanh pho|dia chi|sdt|so dien thoai|day du)\\b)[a-z0-9]+';
+  const hasWard = new RegExp(`\\b(?:xa|phuong|thi tran)\\s+${markerValue}\\b`).test(s);
+  const hasDistrict = new RegExp(`\\b(?:huyen|quan|thi xa)\\s+${markerValue}\\b`).test(s) ||
+    new RegExp(`\\bthanh pho\\s+${markerValue}.*\\btinh\\s+${markerValue}\\b`).test(s);
+  const hasProvince = new RegExp(`\\btinh\\s+${markerValue}\\b`).test(s) || hasAddressCityAbbreviation(s) ||
+    CENTRAL_CITY_NAMES.some((city) => new RegExp(`\\b(?:thanh pho\\s+)?${city}\\b`).test(s));
+  return hasWard && hasDistrict && hasProvince;
 }
 
 // Detect messages that are NOT real customer text: empty, stickers, likes,
@@ -84,12 +187,7 @@ function detectPhoneNumber(text) {
 }
 
 function detectAddress(text) {
-  const raw = stripUrls(text);
-  const mainHits = getMainAddressMarkerHits(raw);
-  if (!mainHits.length) return false;
-  if (mainHits.length >= 2) return true;
-  if (hasAddressCityAbbreviation(raw)) return true;
-  return hasExplicitAddressMarker(raw);
+  return detectAddressMention(text);
 }
 
 function detectPriceQuestion(text) {
@@ -104,7 +202,13 @@ function detectGreeting(text) {
 
 function detectShippingQuestion(text) {
   const s = normalizeText(text);
-  return ['ship', 'vận chuyển', 'giao hàng', 'bao lâu', 'phí giao', 'phí ship', 'cod'].some((k) => s.includes(k));
+  return ['ship', 'vận chuyển', 'giao hàng', 'có giao', 'giao về', 'giao tới', 'bao lâu', 'phí giao', 'phí ship', 'cod'].some((k) => s.includes(k));
+}
+
+function detectDeliveryQuestion(text) {
+  if (!detectShippingQuestion(text)) return false;
+  const s = normalizeVietnameseText(text).replace(/[^a-z0-9]+/g, ' ').trim();
+  return /\b(?:co giao|giao duoc khong|ship duoc khong|bao lau|phi giao|phi ship|mat may ngay|van chuyen|cod)\b/.test(s);
 }
 
 function detectBuyIntent(text) {
@@ -114,7 +218,9 @@ function detectBuyIntent(text) {
 
 function detectRefusal(text) {
   const s = normalizeText(text);
-  return ['không mua', 'chưa mua', 'để sau', 'không cần', 'cảm ơn', 'đắt', 'suy nghĩ'].some((k) => s.includes(k));
+  if (['không mua', 'chưa mua', 'để sau', 'không cần', 'đắt', 'suy nghĩ'].some((k) => s.includes(k))) return true;
+  const folded = normalizeVietnameseText(text).replace(/[^a-z0-9]+/g, ' ').trim();
+  return /^(?:da\s+)?cam on(?:\s+(?:shop|em|anh|chi))?(?:\s+nhe)?$/.test(folded);
 }
 
 function detectComplaint(text) {
@@ -157,7 +263,7 @@ function extractAddress(text) {
 function looksLikeRealAddress(address) {
   const s = normalizeText(address);
   if (!s || s.length < 6) return false;
-  return detectAddress(address);
+  return hasCompleteAdministrativeAddress(address);
 }
 
 // Parse contact info out of a message: phone + address, with offline validity
@@ -178,28 +284,55 @@ function classifyMessage(text) {
   // Non-text events (sticker, like, photo-only, pure link, empty) must NOT be
   // misread as address/phone. Return a dedicated intent and skip detection.
   if (isNonTextMessage(text)) {
-    return { intent: 'NON_TEXT', hasPhone: false, hasAddress: false };
+    return { intent: 'NON_TEXT', hasPhone: false, hasAddress: false, addressRole: 'NONE', contactState: 'NONE' };
+  }
+  if (detectComplaint(text)) return { intent: 'COMPLAINT', hasPhone: false, hasAddress: false, addressRole: 'NONE', contactState: 'NONE' };
+  if (detectRefusal(text)) return { intent: 'REFUSAL', hasPhone: false, hasAddress: false, addressRole: 'NONE', contactState: 'NONE' };
+  if (detectStoreLocationRequest(text)) {
+    return { intent: 'STORE_LOCATION_QUESTION', hasPhone: false, hasAddress: false, addressRole: 'STORE_LOCATION_REQUEST', contactState: 'NONE' };
+  }
+  if (detectDeliveryQuestion(text)) {
+    return { intent: 'SHIPPING_QUESTION', hasPhone: false, hasAddress: false, addressRole: 'DELIVERY_QUESTION', contactState: 'NONE' };
   }
   const hasPhone = detectPhoneNumber(text);
-  const hasAddress = detectAddress(text);
-  if (hasPhone && hasAddress) return { intent: 'BUY_INTENT_HIGH', hasPhone, hasAddress };
-  if (hasPhone) return { intent: 'PHONE_DETECTED', hasPhone, hasAddress };
-  if (hasAddress) return { intent: 'ADDRESS_DETECTED', hasPhone, hasAddress };
-  if (detectComplaint(text)) return { intent: 'COMPLAINT', hasPhone, hasAddress };
-  if (detectPriceQuestion(text)) return { intent: 'PRICE_QUESTION', hasPhone, hasAddress };
-  if (detectShippingQuestion(text)) return { intent: 'SHIPPING_QUESTION', hasPhone, hasAddress };
-  if (detectBuyIntent(text)) return { intent: 'BUY_INTENT_LOW', hasPhone, hasAddress };
-  if (detectRefusal(text)) return { intent: 'REFUSAL', hasPhone, hasAddress };
-  if (detectGreeting(text)) return { intent: 'GREETING', hasPhone, hasAddress };
-  return { intent: 'UNKNOWN', hasPhone, hasAddress };
+  const hasAddress = detectAddressMention(text);
+  const addressValid = hasAddress && hasCompleteAdministrativeAddress(text);
+  const addressRole = hasAddress ? 'CUSTOMER_ADDRESS' : 'NONE';
+  const contactState = hasPhone && addressValid
+    ? 'COMPLETE'
+    : hasAddress && !addressValid
+      ? 'INCOMPLETE_ADDRESS'
+      : hasPhone
+        ? 'PHONE_ONLY'
+        : addressValid
+          ? 'ADDRESS_ONLY'
+          : 'NONE';
+  const result = { hasPhone, hasAddress, addressRole, contactState };
+  if (contactState === 'COMPLETE') return { intent: 'BUY_INTENT_HIGH', ...result };
+  if (contactState === 'PHONE_ONLY') return { intent: 'PHONE_DETECTED', ...result };
+  if (contactState === 'ADDRESS_ONLY') return { intent: 'ADDRESS_DETECTED', ...result };
+  if (contactState === 'INCOMPLETE_ADDRESS') return { intent: 'ADDRESS_INCOMPLETE', ...result };
+  if (detectPriceQuestion(text)) return { intent: 'PRICE_QUESTION', ...result };
+  if (detectBuyIntent(text)) return { intent: 'BUY_INTENT_LOW', ...result };
+  if (detectGreeting(text)) return { intent: 'GREETING', ...result };
+  return { intent: 'UNKNOWN', ...result };
 }
 
 module.exports = {
+  MAX_CUSTOMER_TAGS,
+  MAX_CUSTOMER_TAG_LENGTH,
   normalizeText,
+  normalizeVietnameseText,
+  sanitizeCustomerTags,
+  getEligibleReturningCustomerTags,
+  getRepurchaseBlocker,
+  detectExplicitRepurchase,
   isNonTextMessage,
   stripUrls,
   detectPhoneNumber,
   detectAddress,
+  detectStoreLocationRequest,
+  hasCompleteAdministrativeAddress,
   extractPhone,
   extractAddress,
   looksLikeRealAddress,
@@ -207,6 +340,7 @@ module.exports = {
   detectPriceQuestion,
   detectGreeting,
   detectShippingQuestion,
+  detectDeliveryQuestion,
   detectBuyIntent,
   detectRefusal,
   detectComplaint,

@@ -8,7 +8,11 @@ const shortcuts = [
   { shortcut: '/1', topic: 'Khách mới', message: 'Xin chào khách mới' },
   { shortcut: '/2', topic: 'Báo giá', message: 'Bảng giá combo liệu trình' },
   { shortcut: '/3', topic: 'Ship COD', message: 'Thông tin ship cod vận chuyển' },
-  { shortcut: '/4', topic: 'Khiếu nại', message: 'Shop tiếp nhận khiếu nại và xử lý' }
+  { shortcut: '/4', topic: 'Khiếu nại', message: 'Shop tiếp nhận khiếu nại và xử lý' },
+  { shortcut: '/8', topic: 'Xin thông tin nhận hàng', message: 'Cho shop xin số điện thoại và địa chỉ nhận hàng đầy đủ' },
+  { shortcut: '/10', topic: 'Địa chỉ nhà thuốc', message: 'Địa chỉ công ty và quầy thuốc, gửi map cho khách' },
+  { shortcut: '/17', topic: 'Xin số điện thoại', message: 'Cho shop xin số điện thoại nhận hàng' },
+  { shortcut: '/18', topic: 'Xin địa chỉ', message: 'Cho shop xin địa chỉ nhận hàng đầy đủ' }
 ];
 
 test('v4 safety: only /number shortcuts are valid outgoing messages', () => {
@@ -54,13 +58,37 @@ test('v4 safety: keywordSuggest skips non-text and never suggests shortcut for s
   assert.equal(result.shouldSend, false);
 });
 
-test('v4 safety: keywordSuggest escalates contact messages instead of sending shortcut', () => {
+test('v4 safety: keywordSuggest requests missing address for phone-only contact', () => {
   const result = keywordSuggest('sđt 0912345678', shortcuts);
 
   assert.equal(result.intent, 'PHONE_DETECTED');
-  assert.equal(result.action, 'TAG_BUY_AND_MARK_UNREAD');
-  assert.equal(result.bestShortcut, null);
+  assert.equal(result.action, 'SUGGEST_SHORTCUT');
+  assert.equal(result.bestShortcut, '/18');
   assert.equal(result.shouldSend, false);
+  assert.equal(result.shouldEscalate, false);
+});
+
+test('v4 safety: keywordSuggest selects contact shortcuts by semantic role', () => {
+  assert.equal(keywordSuggest('xã A huyện B tỉnh C', shortcuts).bestShortcut, '/17');
+  assert.equal(keywordSuggest('địa chỉ phường 3 quận 8', shortcuts).bestShortcut, '/8');
+  assert.equal(keywordSuggest('0912345678, phường 3 quận 8', shortcuts).bestShortcut, '/18');
+});
+
+test('v4 safety: store location shortcut is selected dynamically, not by shortcut number', () => {
+  const renamed = shortcuts.map((item) => item.shortcut === '/10' ? { ...item, shortcut: '/77' } : item);
+  const result = keywordSuggest('xin địa chỉ nhà thuốc', renamed);
+
+  assert.equal(result.intent, 'STORE_LOCATION_QUESTION');
+  assert.equal(result.action, 'SUGGEST_SHORTCUT');
+  assert.equal(result.bestShortcut, '/77');
+  assert.equal(result.shouldSend, false);
+});
+
+test('v4 safety: missing semantic shortcut waits for review', () => {
+  const result = keywordSuggest('xin địa chỉ nhà thuốc', shortcuts.filter((item) => item.shortcut !== '/10'));
+
+  assert.equal(result.action, 'WAITING_REVIEW');
+  assert.equal(result.bestShortcut, null);
   assert.equal(result.shouldEscalate, true);
 });
 
