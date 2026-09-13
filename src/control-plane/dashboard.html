@@ -196,7 +196,7 @@
 <script>
   const el = (id) => document.getElementById(id);
   const SUPABASE_URL = "https://dbxraxyytegqmzhygosc.supabase.co";
-  const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRieHJheHl5dGVncW16aHlnb3NjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDIwMDcwOTgsImV4cCI6MjA1NzU4MzA5OH0.J2WzWqQz263fJt2O2k6h_rZp_m9a7R2Z2X8a";
+  const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRieHJheHl5dGVncW16aHlnb3NjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzUzNzg2NDAsImV4cCI6MjA5MDk1NDY0MH0.aqu_UdG_j_Vrtc1nKmKNOLBW7TTbyX704JgiaCU4iIk";
   function getToken() { return localStorage.getItem("control_plane_jwt") || ""; }
   function setToken(val) { if (val) localStorage.setItem("control_plane_jwt", val); else localStorage.removeItem("control_plane_jwt"); }
   function showToast(msg, isError) { const t = el("toast-msg"); t.textContent = msg; t.className = "toast show" + (isError ? " error" : ""); setTimeout(() => { t.className = "toast"; }, 3200); }
