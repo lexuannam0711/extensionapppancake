@@ -4,7 +4,6 @@ const fs = require('fs');
 const path = require('path');
 const { app, BrowserWindow, ipcMain, dialog, shell, webContents, safeStorage } = require('electron');
 const { configureStorePaths } = require('./server/store');
-const { createModernUpdater } = require('./update/modern-updater');
 const { createElectronUpdaterBridge } = require('./update/electronUpdaterBridge');
 const telegram = require('./server/telegram');
 const extManager = require('./extensionManager');
@@ -211,6 +210,11 @@ function registerIpcHandlers() {
     await shell.openPath(extManager.EXT_ROOT);
     return extManager.EXT_ROOT;
   });
+
+  // --- electron-updater IPC ---
+  ipcMain.handle('updater:get-state', () => updater?.getState?.() || { status: 'idle' });
+  ipcMain.handle('updater:check', async () => updater?.checkForUpdates?.());
+  ipcMain.handle('updater:quit-and-install', () => updater?.quitAndInstall?.());
 }
 
 async function createWindow() {
@@ -397,6 +401,7 @@ app.whenReady().then(createWindow);
 
 app.on('before-quit', () => {
   controlPlaneClient?.dispose();
+  updater?.dispose?.();
   if (updater?.installOnQuit) { updater.installOnQuit(); }
 });
 

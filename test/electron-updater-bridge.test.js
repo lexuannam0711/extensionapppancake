@@ -94,3 +94,11 @@ test('electronUpdaterBridge blocks update if device is revoked on VPS', () => {
   assert.match(bridge.getState().error, /blocked/i);
   assert.equal(mockAutoUpdater.downloadCalled, false);
 });
+test('electronUpdaterBridge dispose cleans up all listeners on autoUpdater', () => {
+  const bridge = createElectronUpdaterBridge();
+  const initialListenerCount = mockAutoUpdater.eventNames().reduce((sum, ev) => sum + mockAutoUpdater.listenerCount(ev), 0);
+  assert.ok(initialListenerCount > 0, 'Should have registered listeners');
+  bridge.dispose();
+  const postDisposeCount = mockAutoUpdater.eventNames().reduce((sum, ev) => sum + mockAutoUpdater.listenerCount(ev), 0);
+  assert.equal(postDisposeCount, 0, 'All listeners should be removed on dispose');
+});

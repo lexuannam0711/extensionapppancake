@@ -8,7 +8,7 @@ function createElectronUpdaterBridge({
   autoInstallOnAppQuit = true
 } = {}) {
   let state = {
-    status: 'idle', // 'idle' | 'checking' | 'available' | 'downloading' | 'downloaded' | 'not-available' | 'error'
+    status: 'idle',
     info: null,
     progress: null,
     error: null
@@ -33,16 +33,14 @@ function createElectronUpdaterBridge({
   autoUpdater.allowPrerelease = allowPrerelease;
   autoUpdater.autoInstallOnAppQuit = autoInstallOnAppQuit;
 
-  autoUpdater.on('checking-for-update', () => {
+  const onChecking = () => {
     setState({ status: 'checking', error: null });
     controlPlaneClient?.setUpdateStatus('checking');
-  });
+  };
 
-  autoUpdater.on('update-available', async (info) => {
+  const onAvailable = async (info) => {
     setState({ status: 'available', info, error: null });
     controlPlaneClient?.setUpdateStatus('available');
-    // ponytail: VPS kill-switch. If controlPlaneClient has isVersionBlocked,
-    // check before downloading. Upgrade to command-based block when Sprint 2 ships.
     try {
       const blocked = controlPlaneClient?.getStatus?.()?.status === 'disabled'
         || controlPlaneClient?.getStatus?.()?.status === 'revoked';
@@ -53,33 +51,48 @@ function createElectronUpdaterBridge({
       }
     } catch (_) {}
     sendToWindow('updater:available', info);
-    // Auto download after VPS check passes
-    try { autoUpdater.downloadUpdate(); } catch (_) {}
-  });
+    try { await autoUpdater.downloadUpdate(); } catch (_) {}
+  };
 
-  autoUpdater.on('update-not-available', (info) => {
+  const onNotAvailable = (info) => {
     setState({ status: 'not-available', info, error: null });
     controlPlaneClient?.setUpdateStatus('current');
     sendToWindow('updater:not-available', info);
-  });
+  };
 
-  autoUpdater.on('download-progress', (progress) => {
+  const onProgress = (progress) => {
     setState({ status: 'downloading', progress });
     sendToWindow('updater:progress', progress);
-  });
+  };
 
-  autoUpdater.on('update-downloaded', (info) => {
+  const onDownloaded = (info) => {
     setState({ status: 'downloaded', info });
     controlPlaneClient?.setUpdateStatus('downloaded');
     sendToWindow('updater:downloaded', info);
-  });
+  };
 
-  autoUpdater.on('error', (error) => {
+  const onError = (error) => {
     const errorMsg = error?.message || String(error || 'Unknown update error');
     setState({ status: 'error', error: errorMsg });
     controlPlaneClient?.setUpdateStatus('error', errorMsg);
     sendToWindow('updater:error', { message: errorMsg });
-  });
+  };
+
+  autoUpdater.on('checking-for-update', onChecking);
+  autoUpdater.on('update-available', onAvailable);
+  autoUpdater.on('update-not-available', onNotAvailable);
+  autoUpdater.on('download-progress', onProgress);
+  autoUpdater.on('update-downloaded', onDownloaded);
+  autoUpdater.on('error', onError);
+
+  function dispose() {
+    autoUpdater.removeListener('checking-for-update', onChecking);
+    autoUpdater.removeListener('update-available', onAvailable);
+    autoUpdater.removeListener('update-not-available', onNotAvailable);
+    autoUpdater.removeListener('download-progress', onProgress);
+    autoUpdater.removeListener('update-downloaded', onDownloaded);
+    autoUpdater.removeListener('error', onError);
+  }
 
   async function checkForUpdates() {
     try {
@@ -108,6 +121,7 @@ function createElectronUpdaterBridge({
     checkForUpdates,
     quitAndInstall,
     getState,
+    dispose,
     autoUpdater
   });
 }
