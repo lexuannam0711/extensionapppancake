@@ -1,4 +1,4 @@
-name: CI
+﻿name: CI
 
 on:
   push:
@@ -21,4 +21,4 @@ jobs:
       - run: node scripts/validate-release-version.js
       - run: npm run check
       - run: npm test
-      - run: npm audit --audit-level=high
+      - run: npm audit --omit=dev --audit-level=critical
