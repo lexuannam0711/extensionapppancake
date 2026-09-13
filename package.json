@@ -1,6 +1,6 @@
 {
   "name": "pancake-desktop-ai-shortcut-bot-v3",
-  "version": "3.0.0",
+  "version": "3.0.1",
   "description": "Electron desktop app chÃ¡ÂºÂ¡y Pancake + AI chÃ¡Â»Ân shortcut /n + upload Excel, khÃƒÂ´ng cÃ¡ÂºÂ§n extension/VPS.",
   "main": "src/main.js",
   "type": "commonjs",
