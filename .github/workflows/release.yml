@@ -45,7 +45,7 @@ jobs:
         shell: pwsh
         run: |
           $version = $env:GITHUB_REF_NAME.Substring(1)
-          npm version --no-git-tag-version $version
+          npm version --no-git-tag-version --allow-same-version $version
       - name: Prepare pinned updater public key
         shell: pwsh
         env:
