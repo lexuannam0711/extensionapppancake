@@ -211,10 +211,29 @@ function createReleaseProvider(manifests = {}, { publicKey = '', allowedHosts = 
   });
 }
 
+const fsSync = require('fs');
+const path = require('path');
+const dashboardHtmlContent = fsSync.readFileSync(path.join(__dirname, 'dashboard.html'), 'utf8');
+
 function dashboardHtml() {
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Pancake Admin</title><style>body{font:15px system-ui;margin:2rem;background:#f5f7fb;color:#172033}button{margin:.2rem;padding:.4rem .7rem}.row{display:flex;gap:.5rem;flex-wrap:wrap;align-items:center}.card{background:#fff;padding:1rem;margin-bottom:1rem;border-radius:10px}pre{white-space:pre-wrap;max-height:24rem;overflow:auto}input{min-width:18rem;padding:.35rem}</style></head><body><h1>Pancake Admin</h1><div class="card"><div class="row"><label for="token">Supabase JWT</label><input id="token" autocomplete="off"><button id="refresh">Refresh</button></div><p id="status" role="status">Sign in to load.</p></div><div class="card"><h2>Users</h2><div class="row"><input id="disable-user-id" placeholder="User ID" aria-label="User ID"><button id="disable-user">Disable user</button></div><pre id="users">-</pre></div><div class="card"><h2>Devices</h2><div class="row"><input id="revoke-device-id" placeholder="Device ID" aria-label="Device ID"><button id="revoke-device">Revoke device</button></div><pre id="devices">-</pre></div><div class="card"><h2>Release policy</h2><div class="row"><input id="block-version" placeholder="Version e.g. 3.1.0" aria-label="Version"><input id="block-reason" placeholder="Reason" aria-label="Reason"><button id="block-release">Block version</button></div><pre id="audit">-</pre></div><script>const el=(id)=>document.getElementById(id);const token=()=>el('token').value.trim();async function api(path,options={}){const headers={Authorization:'Bearer '+token(),...(options.body?{'Content-Type':'application/json'}:{})};const response=await fetch(path,{...options,headers});if(!response.ok)throw Error(await response.text());return response.status===204?null:response.json()}async function loadAll(){el('status').textContent='Loading...';try{const [users,devices,audit]=await Promise.all([api('/v1/admin/users'),api('/v1/admin/devices'),api('/v1/admin/audit')]);el('users').textContent=JSON.stringify(users,null,2);el('devices').textContent=JSON.stringify(devices,null,2);el('audit').textContent=JSON.stringify(audit,null,2);el('status').textContent='Loaded'}catch(error){el('status').textContent=error.message}}async function action(path,body){try{await api(path,{method:'POST',body:JSON.stringify(body||{})});await loadAll()}catch(error){el('status').textContent=error.message}}el('refresh').addEventListener('click',loadAll);el('disable-user').addEventListener('click',()=>action('/v1/admin/users/'+encodeURIComponent(el('disable-user-id').value.trim())+'/disable'));el('revoke-device').addEventListener('click',()=>action('/v1/admin/devices/'+encodeURIComponent(el('revoke-device-id').value.trim())+'/revoke'));el('block-release').addEventListener('click',()=>action('/v1/admin/releases/'+encodeURIComponent(el('block-version').value.trim())+'/block',{reason:el('block-reason').value.trim()}));</script></body></html>`;
+  return dashboardHtmlContent;
 }
-function createControlPlaneApp({ repository = createInMemoryRepository(), manifests = {}, releaseProvider = createReleaseProvider(manifests), jwtSecret = process.env.SUPABASE_JWT_SECRET, expectedIssuer, expectedAudience, enforceHttps = false, trustProxy = false, verifyToken } = {}) {
+async function verifyRemoteSupabaseToken(token, { url, apiKey }) {
+  if (!url) throw new Error('SUPABASE_URL is required for remote token verification');
+  const endpoint = `${String(url).replace(/\/$/, '')}/auth/v1/user`;
+  const headers = { Authorization: `Bearer ${token}` };
+  if (apiKey) headers.apikey = apiKey;
+  const res = await fetch(endpoint, { headers });
+  if (!res.ok) throw new Error('Remote token verification failed');
+  const user = await res.json();
+  return {
+    sub: user.id,
+    email: user.email || '',
+    role: user.app_metadata?.role || 'operator'
+  };
+}
+
+function createControlPlaneApp({ repository = createInMemoryRepository(), manifests = {}, releaseProvider = createReleaseProvider(manifests), jwtSecret = process.env.SUPABASE_JWT_SECRET, expectedIssuer, expectedAudience, enforceHttps = false, trustProxy = false, verifyToken, supabaseUrl = process.env.SUPABASE_URL, supabaseApiKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY } = {}) {
   const app = express();
   if (trustProxy) app.set('trust proxy', true);
   if (enforceHttps) app.use((req, res, next) => { if (req.secure) return next(); return res.status(400).json({ error: 'HTTPS is required' }); });
@@ -226,7 +245,20 @@ function createControlPlaneApp({ repository = createInMemoryRepository(), manife
       const authorization = String(req.headers.authorization || '');
       if (!authorization.startsWith('Bearer ')) return res.status(401).json({ error: 'Authentication required' });
       const token = authorization.slice(7).trim();
-      const claims = verifyToken ? await verifyToken(token) : verifyHs256Token(token, jwtSecret, { issuer: expectedIssuer, audience: expectedAudience });
+      let claims;
+      if (verifyToken) {
+        claims = await verifyToken(token);
+      } else {
+        // Detect token algorithm from header
+        const [encodedHeader] = token.split('.');
+        let header = {};
+        try { header = JSON.parse(decodeBase64Url(encodedHeader)); } catch (_) {}
+        if (header.alg === 'ES256' || header.alg === 'RS256') {
+          claims = await verifyRemoteSupabaseToken(token, { url: supabaseUrl, apiKey: supabaseApiKey });
+        } else {
+          claims = verifyHs256Token(token, jwtSecret, { issuer: expectedIssuer, audience: expectedAudience });
+        }
+      }
       const user = await repository.ensureUser(claims);
       if (!user.active) return res.status(403).json({ error: 'User disabled' });
       req.user = user;

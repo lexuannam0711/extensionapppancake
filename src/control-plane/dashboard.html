@@ -1,0 +1,365 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Pancake Admin — Control Plane</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg-body: #0b0f19;
+      --bg-card: #111827;
+      --bg-card-hover: #172033;
+      --bg-input: #1f293d;
+      --border: #1f293d;
+      --border-focus: #3b82f6;
+      --text-main: #f9fafb;
+      --text-muted: #9ca3af;
+      --text-dim: #6b7280;
+      --primary: #3b82f6;
+      --primary-hover: #2563eb;
+      --success: #10b981;
+      --success-bg: rgba(16, 185, 129, 0.12);
+      --danger: #ef4444;
+      --danger-bg: rgba(239, 68, 68, 0.12);
+      --warning: #f59e0b;
+      --warning-bg: rgba(245, 158, 11, 0.12);
+      --font: 'Inter', system-ui, -apple-system, sans-serif;
+      --font-mono: 'JetBrains Mono', monospace;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: var(--font); background: var(--bg-body); color: var(--text-main); min-height: 100vh; line-height: 1.5; -webkit-font-smoothing: antialiased; }
+    header { background: #0f172a; border-bottom: 1px solid var(--border); padding: 0.85rem 1.5rem; display: flex; align-items: center; justify-content: space-between; position: sticky; top: 0; z-index: 40; }
+    .brand { display: flex; align-items: center; gap: 0.75rem; }
+    .brand-logo { width: 32px; height: 32px; background: linear-gradient(135deg, #3b82f6, #1d4ed8); border-radius: 8px; display: grid; place-items: center; font-weight: 700; color: white; font-size: 16px; box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3); }
+    .brand-text h1 { font-size: 15px; font-weight: 700; letter-spacing: -0.01em; }
+    .brand-text p { font-size: 11px; color: var(--text-dim); }
+    .header-actions { display: flex; align-items: center; gap: 0.75rem; }
+    .btn { font-family: var(--font); font-size: 13px; font-weight: 500; padding: 0.45rem 0.9rem; border-radius: 6px; border: 1px solid transparent; cursor: pointer; transition: all 0.15s ease; display: inline-flex; align-items: center; gap: 0.4rem; text-decoration: none; white-space: nowrap; }
+    .btn-primary { background: var(--primary); color: #fff; }
+    .btn-primary:hover { background: var(--primary-hover); }
+    .btn-secondary { background: var(--bg-card); border-color: var(--border); color: var(--text-main); }
+    .btn-secondary:hover { background: var(--bg-card-hover); border-color: #374151; }
+    .btn-danger { background: var(--danger-bg); border-color: rgba(239, 68, 68, 0.3); color: #fca5a5; }
+    .btn-danger:hover { background: var(--danger); color: #fff; }
+    .btn-sm { padding: 0.25rem 0.6rem; font-size: 12px; border-radius: 4px; }
+    .container { max-width: 1280px; margin: 1.5rem auto; padding: 0 1rem; }
+    #auth-view { max-width: 440px; margin: 3.5rem auto; background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px; padding: 2rem; box-shadow: 0 20px 40px rgba(0,0,0,0.4); }
+    #auth-view h2 { font-size: 18px; font-weight: 700; margin-bottom: 0.5rem; }
+    #auth-view p.sub { font-size: 13px; color: var(--text-muted); margin-bottom: 1.25rem; }
+    .auth-toggle { display: flex; background: var(--bg-body); border-radius: 8px; padding: 3px; margin-bottom: 1.25rem; border: 1px solid var(--border); }
+    .auth-toggle button { flex: 1; padding: 0.45rem; font-size: 12px; font-weight: 600; background: transparent; border: none; color: var(--text-muted); border-radius: 6px; cursor: pointer; transition: all 0.15s; }
+    .auth-toggle button.active { background: var(--bg-card); color: var(--text-main); box-shadow: 0 1px 3px rgba(0,0,0,0.3); }
+    .form-group { margin-bottom: 1rem; }
+    .form-group label { display: block; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted); margin-bottom: 0.35rem; }
+    .input-text { width: 100%; background: var(--bg-input); border: 1px solid var(--border); border-radius: 6px; padding: 0.55rem 0.75rem; font-size: 13px; color: var(--text-main); font-family: inherit; transition: border-color 0.15s; }
+    .input-text:focus { outline: none; border-color: var(--border-focus); box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2); }
+    .metrics-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 1rem; margin-bottom: 1.5rem; }
+    .metric-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px; padding: 1.1rem; display: flex; flex-direction: column; gap: 0.3rem; position: relative; overflow: hidden; }
+    .metric-label { font-size: 12px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.03em; }
+    .metric-value { font-size: 26px; font-weight: 700; color: #fff; font-feature-settings: "tnum"; display: flex; align-items: baseline; gap: 0.5rem; }
+    .pulse-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--success); box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7); animation: pulse 2s infinite; }
+    @keyframes pulse { 0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7); } 70% { transform: scale(1); box-shadow: 0 0 0 6px rgba(16, 185, 129, 0); } 100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); } }
+    .tabs { display: flex; gap: 0.5rem; border-bottom: 1px solid var(--border); margin-bottom: 1.25rem; }
+    .tab-btn { background: none; border: none; color: var(--text-muted); font-size: 13px; font-weight: 600; padding: 0.65rem 1rem; cursor: pointer; border-bottom: 2px solid transparent; transition: all 0.15s; font-family: inherit; }
+    .tab-btn:hover { color: var(--text-main); }
+    .tab-btn.active { color: var(--primary); border-bottom-color: var(--primary); }
+    .card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; margin-bottom: 1.5rem; }
+    .card-header { padding: 0.9rem 1.2rem; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; background: rgba(255,255,255,0.01); }
+    .card-header h2 { font-size: 14px; font-weight: 600; }
+    .card-body { padding: 1.2rem; }
+    .table-responsive { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; text-align: left; font-size: 13px; }
+    th { background: #0f172a; color: var(--text-dim); font-weight: 600; padding: 0.65rem 1rem; text-transform: uppercase; font-size: 11px; letter-spacing: 0.05em; border-bottom: 1px solid var(--border); }
+    td { padding: 0.75rem 1rem; border-bottom: 1px solid var(--border); color: var(--text-muted); }
+    tr:hover td { background: var(--bg-card-hover); color: var(--text-main); }
+    .badge { display: inline-flex; align-items: center; gap: 0.35rem; padding: 0.2rem 0.5rem; border-radius: 4px; font-size: 11px; font-weight: 600; letter-spacing: 0.02em; }
+    .badge-online { background: var(--success-bg); color: #34d399; }
+    .badge-offline { background: rgba(107, 114, 128, 0.15); color: #9ca3af; }
+    .badge-danger { background: var(--danger-bg); color: #f87171; }
+    .badge-admin { background: rgba(139, 92, 246, 0.15); color: #c084fc; }
+    .badge-operator { background: rgba(59, 130, 246, 0.15); color: #60a5fa; }
+    .code-tag { font-family: var(--font-mono); font-size: 12px; background: var(--bg-input); padding: 0.15rem 0.4rem; border-radius: 4px; color: #93c5fd; }
+    .empty-state { text-align: center; padding: 3rem 1rem; color: var(--text-dim); font-size: 13px; }
+    .toast { position: fixed; bottom: 1.5rem; right: 1.5rem; background: #1e293b; color: #fff; border: 1px solid var(--border); border-radius: 6px; padding: 0.75rem 1rem; font-size: 13px; box-shadow: 0 10px 25px rgba(0,0,0,0.5); z-index: 100; opacity: 0; transform: translateY(10px); transition: all 0.2s ease; pointer-events: none; }
+    .toast.show { opacity: 1; transform: translateY(0); }
+    .toast.error { border-color: var(--danger); background: #3f1218; color: #fca5a5; }
+  </style>
+</head>
+<body>
+<header>
+  <div class="brand">
+    <div class="brand-logo">P</div>
+    <div class="brand-text">
+      <h1>Pancake Control Plane</h1>
+      <p>Quản trị phiên bản &amp; máy trạm nội bộ</p>
+    </div>
+  </div>
+  <div class="header-actions" id="header-user-bar" style="display:none;">
+    <span style="font-size:12px;color:var(--text-muted);" id="user-greeting">Admin</span>
+    <button class="btn btn-secondary btn-sm" id="btn-refresh">Làm mới</button>
+    <button class="btn btn-danger btn-sm" id="btn-logout">Đăng xuất</button>
+  </div>
+</header>
+<div class="container">
+  <div id="auth-view">
+    <h2>Đăng nhập Quản trị</h2>
+    <p class="sub">Hệ thống yêu cầu xác thực tài khoản để truy cập Control Plane.</p>
+    <div class="auth-toggle">
+      <button id="tab-auth-pwd" class="active" type="button">Email &amp; Mật khẩu</button>
+      <button id="tab-auth-jwt" type="button">Supabase JWT</button>
+    </div>
+    <div id="form-auth-pwd">
+      <div class="form-group">
+        <label for="auth-email">Email Admin</label>
+        <input type="email" id="auth-email" class="input-text" placeholder="admin@domain.com" autocomplete="username" value="may1@xuannam.com">
+      </div>
+      <div class="form-group">
+        <label for="auth-password">Mật khẩu</label>
+        <input type="password" id="auth-password" class="input-text" placeholder="Nhập mật khẩu" autocomplete="current-password">
+      </div>
+      <button class="btn btn-primary" id="btn-login-pwd" style="width:100%;margin-top:0.5rem;">Đăng nhập</button>
+    </div>
+    <div id="form-auth-jwt" style="display:none;">
+      <div class="form-group">
+        <label for="jwt-token">Access Token (JWT)</label>
+        <textarea id="jwt-token" class="input-text" rows="4" placeholder="Dán chuỗi access_token (eyJhbGci...)" style="resize:vertical;"></textarea>
+      </div>
+      <button class="btn btn-primary" id="btn-login" style="width:100%;margin-top:0.5rem;">Xác thực bằng Token</button>
+    </div>
+    <p id="auth-status" style="font-size:12px; color:#f87171; margin-top:0.75rem; text-align:center;"></p>
+  </div>
+  <div id="app-view" style="display:none;">
+    <div class="metrics-grid">
+      <div class="metric-card">
+        <div class="metric-label">Thiết bị đang hoạt động</div>
+        <div class="metric-value"><span id="metric-online">0</span><div class="pulse-dot"></div></div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-label">Tổng số thiết bị</div>
+        <div class="metric-value" id="metric-total-devices">0</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-label">Tài khoản hoạt động</div>
+        <div class="metric-value" id="metric-active-users">0</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-label">Phiên bản bị chặn</div>
+        <div class="metric-value" id="metric-blocked-releases" style="color:#f87171;">0</div>
+      </div>
+    </div>
+    <div class="tabs">
+      <button class="tab-btn active" data-tab="tab-devices">Thiết bị (<span id="tab-count-devices">0</span>)</button>
+      <button class="tab-btn" data-tab="tab-users">Người dùng (<span id="tab-count-users">0</span>)</button>
+      <button class="tab-btn" data-tab="tab-killswitch">Chặn phiên bản (Kill Switch)</button>
+      <button class="tab-btn" data-tab="tab-audit">Nhật ký hệ thống</button>
+    </div>
+    <div id="tab-devices" class="tab-content">
+      <div class="card">
+        <div class="card-header">
+          <h2>Danh sách thiết bị máy trạm</h2>
+          <div style="width:240px;"><input type="text" id="device-search" class="input-text" placeholder="Tìm kiếm theo Device ID..." style="padding:0.35rem 0.6rem;font-size:12px;"></div>
+        </div>
+        <div class="table-responsive"><table id="table-devices"><thead><tr><th>Trạng thái</th><th>Device ID</th><th>Hệ điều hành</th><th>Phiên bản App</th><th>Hoạt động cuối</th><th>Thao tác</th></tr></thead><tbody id="devices-tbody"><tr><td colspan="6" class="empty-state">Đang tải dữ liệu...</td></tr></tbody></table></div>
+      </div>
+    </div>
+    <div id="tab-users" class="tab-content" style="display:none;">
+      <div class="card">
+        <div class="card-header"><h2>Quản lý người dùng &amp; phân quyền</h2></div>
+        <div class="table-responsive"><table><thead><tr><th>Trạng thái</th><th>User ID</th><th>Email</th><th>Vai trò</th><th>Tạo lúc</th><th>Thao tác</th></tr></thead><tbody id="users-tbody"><tr><td colspan="6" class="empty-state">Đang tải dữ liệu...</td></tr></tbody></table></div>
+      </div>
+    </div>
+    <div id="tab-killswitch" class="tab-content" style="display:none;">
+      <div class="card">
+        <div class="card-header"><h2>Chặn phiên bản gấp (Release Block)</h2></div>
+        <div class="card-body">
+          <p style="font-size:13px;color:var(--text-muted);margin-bottom:1rem;">Khi phát hiện phiên bản có lỗi nghiêm trọng, nhập số phiên bản vào đây để chặn toàn bộ máy trạm cập nhật hoặc khởi chạy phiên bản này.</p>
+          <div style="display:flex;gap:0.75rem;flex-wrap:wrap;max-width:650px;"><input type="text" id="block-version" class="input-text" placeholder="Ví dụ: 3.1.0" style="flex:1;min-width:140px;"><input type="text" id="block-reason" class="input-text" placeholder="Lý do (ví dụ: Hotfix crash startup)" style="flex:2;min-width:200px;"><button class="btn btn-danger" id="btn-block-release">Chặn phiên bản</button></div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-header"><h2>Các phiên bản đang bị chặn</h2></div>
+        <div class="table-responsive"><table><thead><tr><th>Phiên bản</th><th>Lý do</th><th>Người chặn</th><th>Thời gian</th></tr></thead><tbody id="blocked-tbody"><tr><td colspan="4" class="empty-state">Không có phiên bản nào bị chặn.</td></tr></tbody></table></div>
+      </div>
+    </div>
+    <div id="tab-audit" class="tab-content" style="display:none;">
+      <div class="card">
+        <div class="card-header"><h2>Nhật ký hoạt động quản trị</h2></div>
+        <div class="table-responsive"><table><thead><tr><th>Thời gian</th><th>Hành động</th><th>Actor ID</th><th>Chi tiết</th></tr></thead><tbody id="audit-tbody"><tr><td colspan="4" class="empty-state">Đang tải dữ liệu...</td></tr></tbody></table></div>
+      </div>
+    </div>
+  </div>
+</div>
+<div class="toast" id="toast-msg"></div>
+<script>
+  const el = (id) => document.getElementById(id);
+  const SUPABASE_URL = "https://dbxraxyytegqmzhygosc.supabase.co";
+  const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRieHJheHl5dGVncW16aHlnb3NjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDIwMDcwOTgsImV4cCI6MjA1NzU4MzA5OH0.J2WzWqQz263fJt2O2k6h_rZp_m9a7R2Z2X8a";
+  function getToken() { return localStorage.getItem("control_plane_jwt") || ""; }
+  function setToken(val) { if (val) localStorage.setItem("control_plane_jwt", val); else localStorage.removeItem("control_plane_jwt"); }
+  function showToast(msg, isError) { const t = el("toast-msg"); t.textContent = msg; t.className = "toast show" + (isError ? " error" : ""); setTimeout(() => { t.className = "toast"; }, 3200); }
+  function formatTime(isoStr) { if (!isoStr) return "-"; try { const d = new Date(isoStr); return d.toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit", second: "2-digit" }) + " " + d.toLocaleDateString("vi-VN"); } catch (_) { return isoStr; } }
+  function escapeHtml(str) { return String(str || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;"); }
+  async function api(path, options) { options = options || {}; const headers = { Authorization: "Bearer " + getToken(), ...(options.body ? { "Content-Type": "application/json" } : {}) }; const response = await fetch(path, { ...options, headers }); if (!response.ok) { const text = await response.text(); let errText = text; try { const j = JSON.parse(text); errText = j.error || j.message || text; } catch (_) {} throw new Error(errText); } return response.status === 204 ? null : response.json(); }
+  let cachedDevices = [];
+  async function loadData() {
+    try {
+      const [usersRes, devicesRes, auditRes] = await Promise.all([api("/v1/admin/users"), api("/v1/admin/devices"), api("/v1/admin/audit")]);
+      cachedDevices = (devicesRes && devicesRes.items) || [];
+      const userList = (usersRes && usersRes.items) || [];
+      const auditList = (auditRes && auditRes.items) || [];
+      const onlineCount = cachedDevices.filter(d => d.online && !d.revoked).length;
+      const blockedCount = auditList.filter(a => a.action === "release.block").length;
+      el("metric-online").textContent = onlineCount;
+      el("metric-total-devices").textContent = cachedDevices.length;
+      el("metric-active-users").textContent = userList.filter(u => u.active).length;
+      el("metric-blocked-releases").textContent = blockedCount;
+      el("tab-count-devices").textContent = cachedDevices.length;
+      el("tab-count-users").textContent = userList.length;
+      renderDevices(cachedDevices);
+      const uBody = el("users-tbody");
+      if (!userList.length) { uBody.innerHTML = "<tr><td colspan=\"6\" class=\"empty-state\">Không có người dùng nào.</td></tr>"; } else {
+        uBody.innerHTML = userList.map(u => {
+          const badgeClass = u.active ? "badge-online" : "badge-danger";
+          const badgeText = u.active ? "Hoạt động" : "Bị khóa";
+          const roleClass = u.role === "admin" ? "badge-admin" : "badge-operator";
+          return "<tr>" +
+            "<td><span class=\"badge " + badgeClass + "\">" + badgeText + "</span></td>" +
+            "<td><span class=\"code-tag\">" + escapeHtml(u.id) + "</span></td>" +
+            "<td style=\"color:var(--text-main);font-weight:500;\">" + escapeHtml(u.email || "-") + "</td>" +
+            "<td><span class=\"badge " + roleClass + "\">" + escapeHtml(u.role) + "</span></td>" +
+            "<td>" + formatTime(u.createdAt) + "</td>" +
+            "<td>" + (u.active ? "<button class=\"btn btn-danger btn-sm\" onclick=\"disableUser('" + escapeHtml(u.id) + "')\">Khóa</button>" : "<span style=\"font-size:12px;color:var(--text-dim);\">-</span>") + "</td>" +
+          "</tr>";
+        }).join("");
+      }
+      const bBody = el("blocked-tbody");
+      const blockedReleases = auditList.filter(a => a.action === "release.block");
+      if (!blockedReleases.length) { bBody.innerHTML = "<tr><td colspan=\"4\" class=\"empty-state\">Không có phiên bản nào bị chặn.</td></tr>"; } else {
+        bBody.innerHTML = blockedReleases.map(b => {
+          const ver = (b.data && b.data.version) || b.target || "-";
+          const reason = (b.data && b.data.reason) || "Không rõ lý do";
+          return "<tr>" +
+            "<td><span class=\"code-tag\" style=\"color:#fca5a5;\">v" + escapeHtml(ver) + "</span></td>" +
+            "<td>" + escapeHtml(reason) + "</td>" +
+            "<td><span class=\"code-tag\">" + escapeHtml(b.actorId || "-") + "</span></td>" +
+            "<td>" + formatTime(b.timestamp) + "</td>" +
+          "</tr>";
+        }).join("");
+      }
+      const aBody = el("audit-tbody");
+      if (!auditList.length) { aBody.innerHTML = "<tr><td colspan=\"4\" class=\"empty-state\">Không có nhật ký hoạt động.</td></tr>"; } else {
+        aBody.innerHTML = auditList.slice(0, 50).map(a => {
+          return "<tr>" +
+            "<td>" + formatTime(a.timestamp) + "</td>" +
+            "<td><span class=\"badge badge-operator\">" + escapeHtml(a.action) + "</span></td>" +
+            "<td><span class=\"code-tag\">" + escapeHtml(a.actorId || "-") + "</span></td>" +
+            "<td style=\"font-family:var(--font-mono);font-size:11px;\">" + escapeHtml(JSON.stringify(a.data || {})) + "</td>" +
+          "</tr>";
+        }).join("");
+      }
+    } catch (err) {
+      showToast(err.message, true);
+      if (err.message.includes("token") || err.message.includes("401") || err.message.includes("Authentication")) { setToken(""); showAuth(); }
+    }
+  }
+  function renderDevices(devices) {
+    const dBody = el("devices-tbody");
+    if (!devices.length) { dBody.innerHTML = "<tr><td colspan=\"6\" class=\"empty-state\">Chưa có thiết bị nào đăng ký.</td></tr>"; return; }
+    dBody.innerHTML = devices.map(d => {
+      const isOnline = d.online && !d.revoked;
+      const statusBadge = d.revoked ? "<span class=\"badge badge-danger\">Đã thu hồi</span>" : isOnline ? "<span class=\"badge badge-online\">Online</span>" : "<span class=\"badge badge-offline\">Offline</span>";
+      const actionBtn = !d.revoked ? "<button class=\"btn btn-danger btn-sm\" onclick=\"revokeDevice('" + escapeHtml(d.deviceId) + "')\">Thu hồi</button>" : "<span style=\"font-size:12px;color:var(--text-dim);\">-</span>";
+      return "<tr>" +
+        "<td>" + statusBadge + "</td>" +
+        "<td><span class=\"code-tag\">" + escapeHtml(d.deviceId) + "</span></td>" +
+        "<td>" + escapeHtml(d.os || "-") + "</td>" +
+        "<td><span class=\"code-tag\">v" + escapeHtml(d.appVersion || "-") + "</span></td>" +
+        "<td>" + formatTime(d.lastSeenAt) + "</td>" +
+        "<td>" + actionBtn + "</td>" +
+      "</tr>";
+    }).join("");
+  }
+  window.revokeDevice = async function(deviceId) {
+    if (!confirm("Xác nhận thu hồi thiết bị \"" + deviceId + "\"? Thiết bị sẽ bị ngắt kết nối.")) return;
+    try { await api("/v1/admin/devices/" + encodeURIComponent(deviceId) + "/revoke", { method: "POST" }); showToast("Đã thu hồi thiết bị " + deviceId); loadData(); } catch (err) { showToast(err.message, true); }
+  };
+  window.disableUser = async function(userId) {
+    if (!confirm("Xác nhận vô hiệu hóa tài khoản này?")) return;
+    try { await api("/v1/admin/users/" + encodeURIComponent(userId) + "/disable", { method: "POST" }); showToast("Đã vô hiệu hóa tài khoản"); loadData(); } catch (err) { showToast(err.message, true); }
+  };
+  el("btn-block-release")?.addEventListener("click", async () => {
+    const ver = el("block-version").value.trim();
+    const reason = el("block-reason").value.trim();
+    if (!ver) return alert("Vui lòng nhập phiên bản.");
+    if (!confirm("Xác nhận chặn phiên bản v" + ver + "?")) return;
+    try {
+      await api("/v1/admin/releases/" + encodeURIComponent(ver) + "/block", {
+        method: "POST",
+        body: JSON.stringify({ reason })
+      });
+      showToast("Đã chặn phiên bản " + ver);
+      el("block-version").value = "";
+      el("block-reason").value = "";
+      loadData();
+    } catch (err) { showToast(err.message, true); }
+  });
+  el("device-search")?.addEventListener("input", (e) => {
+    const q = e.target.value.toLowerCase().trim();
+    if (!q) renderDevices(cachedDevices);
+    else renderDevices(cachedDevices.filter(d => (d.deviceId || "").toLowerCase().includes(q)));
+  });
+  document.querySelectorAll(".tab-btn").forEach(btn => {
+    btn.addEventListener("click", () => {
+      document.querySelectorAll(".tab-btn").forEach(b => b.classList.remove("active"));
+      document.querySelectorAll(".tab-content").forEach(c => c.style.display = "none");
+      btn.classList.add("active");
+      const target = el(btn.getAttribute("data-tab"));
+      if (target) target.style.display = "block";
+    });
+  });
+  el("tab-auth-pwd")?.addEventListener("click", () => {
+    el("tab-auth-pwd").classList.add("active");
+    el("tab-auth-jwt").classList.remove("active");
+    el("form-auth-pwd").style.display = "block";
+    el("form-auth-jwt").style.display = "none";
+  });
+  el("tab-auth-jwt")?.addEventListener("click", () => {
+    el("tab-auth-jwt").classList.add("active");
+    el("tab-auth-pwd").classList.remove("active");
+    el("form-auth-jwt").style.display = "block";
+    el("form-auth-pwd").style.display = "none";
+  });
+  function showAuth() { el("auth-view").style.display = "block"; el("app-view").style.display = "none"; el("header-user-bar").style.display = "none"; }
+  function showApp() { el("auth-view").style.display = "none"; el("app-view").style.display = "block"; el("header-user-bar").style.display = "flex"; loadData(); }
+  el("btn-login-pwd")?.addEventListener("click", async () => {
+    const email = el("auth-email").value.trim();
+    const password = el("auth-password").value.trim();
+    if (!email || !password) return alert("Vui lòng điền đầy đủ email và mật khẩu.");
+    const btn = el("btn-login-pwd");
+    btn.disabled = true; btn.textContent = "Đang đăng nhập...";
+    try {
+      const res = await fetch(SUPABASE_URL + "/auth/v1/token?grant_type=password", {
+        method: "POST",
+        headers: { apikey: SUPABASE_ANON_KEY, "Content-Type": "application/json" },
+        body: JSON.stringify({ email, password })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error_description || data.msg || data.error || "Đăng nhập thất bại");
+      setToken(data.access_token);
+      el("user-greeting").textContent = email;
+      showApp();
+    } catch (err) {
+      el("auth-status").textContent = "Lỗi: " + err.message;
+    } finally { btn.disabled = false; btn.textContent = "Đăng nhập"; }
+  });
+  el("auth-password")?.addEventListener("keydown", (e) => { if (e.key === "Enter") el("btn-login-pwd")?.click(); });
+  el("btn-login")?.addEventListener("click", () => { const val = el("jwt-token").value.trim(); if (!val) return alert("Vui lòng dán JWT token."); setToken(val); showApp(); });
+  el("btn-refresh")?.addEventListener("click", loadData);
+  el("btn-logout")?.addEventListener("click", () => { setToken(""); showAuth(); });
+  if (getToken()) showApp(); else showAuth();
+</script>
+</body>
+</html>
