@@ -1,7 +1,9 @@
 require('dotenv').config();
+const crypto = require('crypto');
 const express = require('express');
 const cors = require('cors');
 const multer = require('multer');
+const fs = require('fs');
 const { getSettings, saveSettings, getShortcuts, saveShortcuts, getLogs, appendLog, clearLogs, getExamples, appendExample, deleteExample, deleteExampleByPair, clearExamples, getReviewQueue, addOrUpdateReviewItem, markReviewItemDone, deleteReviewItem, clearDoneReviewItems, UPLOADS } = require('./store');
 const { parseExcel, createTemplateBuffer } = require('./shortcutImporter');
 const { analyzeMessageWithAI, summarizeAIConfig, testAIConnection } = require('./ai');
@@ -10,8 +12,32 @@ const { buildAddressLookup } = require('./addressLookup');
 const { findSimilarExamples } = require('./shortcutMatcher');
 const { isShortcut } = require('./validators');
 const telegram = require('./telegram');
+const { MAX_EXCEL_BYTES, isAllowedExcelUpload } = require('./uploadPolicy');
 
-const upload = multer({ dest: UPLOADS });
+function isAllowedCorsOrigin(origin) {
+  return origin == null || origin === '' || origin === 'null';
+}
+
+function getServerListenOptions(port) {
+  return { port: Number(port), host: '127.0.0.1' };
+}
+
+function redactSettings(settings) {
+  const { aiApiKey, ...safeSettings } = settings || {};
+  return { ...safeSettings, aiApiKeyConfigured: Boolean(aiApiKey) };
+}
+function getAiTestErrorStatus(error) {
+  return ['AI_NETWORK_ERROR', 'AI_PROVIDER_ERROR'].includes(error?.code) ? 502 : 400;
+}
+
+const upload = multer({
+  dest: UPLOADS,
+  limits: { fileSize: MAX_EXCEL_BYTES, files: 1 },
+  fileFilter(_req, file, callback) {
+    if (isAllowedExcelUpload(file)) callback(null, true);
+    else callback(new Error('Chỉ chấp nhận file Excel .xls hoặc .xlsx hợp lệ'));
+  }
+});
 let lastImportPreview = null;
 
 // Shared handler for /api/ai/analyze-message and its legacy alias.
@@ -48,27 +74,38 @@ async function handleAnalyzeMessage(req, res) {
   res.json(output);
 }
 
-function createApp() {
+function createApp({ authToken = process.env.LOCAL_API_TOKEN } = {}) {
   const app = express();
-  app.use(cors({ origin: true }));
+  app.use(cors({
+    origin(origin, callback) {
+      callback(null, isAllowedCorsOrigin(origin));
+    }
+  }));
+  app.use((req, res, next) => {
+    if (!authToken) return next();
+    const supplied = Buffer.from(String(req.headers['x-local-api-token'] || ''));
+    const expected = Buffer.from(String(authToken));
+    if (supplied.length !== expected.length || !crypto.timingSafeEqual(supplied, expected)) return res.status(401).json({ error: 'Local API authentication required' });
+    next();
+  });
   app.use(express.json({ limit: '2mb' }));
   app.use(express.urlencoded({ extended: true }));
 
   app.get('/health', async (_req, res) => {
     const settings = await getSettings();
     const shortcuts = await getShortcuts();
-    res.json({ ok: true, time: new Date().toISOString(), settings, shortcutCount: shortcuts.items.length });
+    res.json({ ok: true, time: new Date().toISOString(), settings: redactSettings(settings), shortcutCount: shortcuts.items.length });
   });
 
   app.get('/', (_req, res) => {
     res.type('html').send(`<!doctype html><html><head><meta charset="utf-8"><title>Pancake Desktop Bot</title><style>body{font-family:Arial;padding:30px;background:#f6fbf8;color:#102018}.card{background:white;border-radius:18px;padding:24px;box-shadow:0 10px 30px #0001;max-width:800px}code{background:#eef7f0;padding:2px 6px;border-radius:6px}</style></head><body><div class="card"><h1>Pancake Desktop AI Shortcut Bot v3</h1><p>Server đang chạy tại <code>http://localhost:${process.env.PORT || 8787}</code>.</p><p>Mở app Electron bằng <code>npm start</code> để chạy Pancake trong cửa sổ desktop.</p><p>API: <code>/health</code>, <code>/api/shortcuts</code>, <code>/api/ai/analyze-message</code>.</p></div></body></html>`);
   });
 
-  app.get('/api/settings', async (_req, res) => res.json(await getSettings()));
+  app.get('/api/settings', async (_req, res) => res.json(redactSettings(await getSettings())));
   app.post('/api/settings', async (req, res) => {
     const saved = await saveSettings(req.body || {});
-    await appendLog({ level: 'INFO', type: 'SETTINGS', message: 'Đã lưu settings', data: saved });
-    res.json(saved);
+    await appendLog({ level: 'INFO', type: 'SETTINGS', message: 'Đã lưu settings', data: { aiApiKeyConfigured: Boolean(saved.aiApiKey) } });
+    res.json(redactSettings(saved));
   });
 
   app.get('/api/ai/config', async (_req, res) => {
@@ -84,7 +121,7 @@ function createApp() {
     };
     const saved = await saveSettings(patch);
     const output = summarizeAIConfig(saved);
-    await appendLog({ level: 'INFO', type: 'AI_CONFIG', message: 'Đã lưu AI config', data: output });
+    await appendLog({ level: 'INFO', type: 'AI_CONFIG', message: 'Đã lưu AI config', data: { aiApiKeyConfigured: Boolean(saved.aiApiKey), source: output.source } });
     res.json(output);
   });
 
@@ -96,7 +133,7 @@ function createApp() {
       res.json(result);
     } catch (error) {
       await appendLog({ level: 'ERROR', type: 'AI_TEST', message: error.message });
-      res.status(400).json({ error: error.message });
+      res.status(getAiTestErrorStatus(error)).json({ error: error.message, code: error.code || 'AI_CONFIG_ERROR' });
     }
   });
 
@@ -150,6 +187,8 @@ function createApp() {
     } catch (error) {
       await appendLog({ level: 'ERROR', type: 'IMPORT', message: error.message });
       res.status(500).json({ error: error.message });
+    } finally {
+      fs.promises.unlink(req.file.path).catch(() => {});
     }
   });
 
@@ -323,11 +362,11 @@ function createApp() {
   return app;
 }
 
-function startServer(port = Number(process.env.PORT || 8787)) {
-  const app = createApp();
+function startServer(port = Number(process.env.PORT || 8787), options = {}) {
+  const app = createApp(options);
   return new Promise((resolve) => {
-    const server = app.listen(port, () => {
-      console.log(`[server] http://localhost:${port}`);
+    const server = app.listen(getServerListenOptions(port), () => {
+      console.log(`[server] http://127.0.0.1:${port}`);
       telegram.notifyServerUp(port).catch(() => {});
       telegram.scheduleDailyReport(getLogs);
       resolve(server);
@@ -348,4 +387,4 @@ if (require.main === module) {
   startServer();
 }
 
-module.exports = { createApp, startServer };
+module.exports = { createApp, startServer, isAllowedCorsOrigin, getServerListenOptions, getAiTestErrorStatus };

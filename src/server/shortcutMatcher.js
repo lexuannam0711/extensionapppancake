@@ -1,4 +1,4 @@
-const { normalizeText, classifyMessage } = require('./rules');
+const { normalizeText, normalizeVietnameseText, classifyMessage } = require('./rules');
 const { validateTopSuggestions } = require('./validators');
 
 const intentKeywords = {
@@ -9,6 +9,43 @@ const intentKeywords = {
   REFUSAL: ['từ chối', 'chưa mua', 'không mua', 'để sau', 'cảm ơn', 'đắt'],
   COMPLAINT: ['khiếu nại', 'hoàn tiền', 'lỗi', 'sai hàng']
 };
+
+function shortcutRole(item) {
+  const text = normalizeVietnameseText(searchableShortcut(item)).replace(/[^a-z0-9]+/g, ' ').trim();
+  const hasPhone = /\b(?:sdt|so dien thoai|dien thoai)\b/.test(text);
+  const hasAddress = /\b(?:dia chi|dia chi cu|thon xom|xa|huyen|tinh)\b/.test(text);
+  if (/\b(?:dia chi cong ty|dia chi cty|nha thuoc|quay thuoc|cua hang|gui map|noi ban)\b/.test(text)) return 'STORE_LOCATION';
+  if (hasPhone && hasAddress) return 'REQUEST_BOTH_CONTACTS';
+  if (hasAddress && /\b(?:xin|gui|cho shop|nhan hang|dia chi cu)\b/.test(text)) return 'REQUEST_CUSTOMER_ADDRESS';
+  if (hasPhone && /\b(?:xin|gui|cho shop)\b/.test(text)) return 'REQUEST_CUSTOMER_PHONE';
+  return null;
+}
+
+function suggestByRole(intent, role, items, reason) {
+  const item = items.find((candidate) => shortcutRole(candidate) === role);
+  if (!item) {
+    return {
+      intent,
+      action: 'WAITING_REVIEW',
+      bestShortcut: null,
+      confidence: 0,
+      reason: `Không tìm thấy shortcut cho vai trò ${role}`,
+      topSuggestions: [],
+      shouldSend: false,
+      shouldEscalate: true
+    };
+  }
+  return {
+    intent,
+    action: 'SUGGEST_SHORTCUT',
+    bestShortcut: item.shortcut,
+    confidence: 1,
+    reason,
+    topSuggestions: [{ shortcut: item.shortcut, topic: item.topic || '', confidence: 1, reason }],
+    shouldSend: false,
+    shouldEscalate: false
+  };
+}
 
 function searchableShortcut(item) {
   return normalizeText([
@@ -84,17 +121,33 @@ function keywordSuggest(customerMessage, shortcuts) {
       shouldEscalate: false
     };
   }
-  if (['BUY_INTENT_HIGH', 'PHONE_DETECTED', 'ADDRESS_DETECTED', 'COMPLAINT'].includes(cls.intent)) {
+  if (cls.contactState === 'COMPLETE') {
     return {
       intent: cls.intent,
-      action: cls.intent === 'COMPLAINT' ? 'WAITING_REVIEW' : 'TAG_BUY_AND_MARK_UNREAD',
+      action: 'TAG_BUY_AND_MARK_UNREAD',
       bestShortcut: null,
-      confidence: cls.intent === 'COMPLAINT' ? 0.8 : 1,
-      reason: cls.intent === 'COMPLAINT' ? 'Tin nhắn có dấu hiệu khiếu nại, nên chờ người xử lý' : 'Khách có SĐT/địa chỉ, cần chủ shop xử lý',
+      confidence: 1,
+      reason: 'Khách có SĐT và địa chỉ đủ ba cấp, cần chủ shop xử lý',
       topSuggestions: [],
       shouldSend: false,
       shouldEscalate: true
     };
+  }
+  if (cls.intent === 'COMPLAINT') {
+    return { intent: cls.intent, action: 'WAITING_REVIEW', bestShortcut: null, confidence: 0.8, reason: 'Tin nhắn có dấu hiệu khiếu nại, nên chờ người xử lý', topSuggestions: [], shouldSend: false, shouldEscalate: true };
+  }
+  if (cls.addressRole === 'STORE_LOCATION_REQUEST') {
+    return suggestByRole(cls.intent, 'STORE_LOCATION', items, 'Khách hỏi địa chỉ hoặc vị trí nhà thuốc');
+  }
+  if (cls.contactState === 'PHONE_ONLY') {
+    return suggestByRole(cls.intent, 'REQUEST_CUSTOMER_ADDRESS', items, 'Khách đã có SĐT, cần xin địa chỉ nhận hàng đầy đủ');
+  }
+  if (cls.contactState === 'ADDRESS_ONLY') {
+    return suggestByRole(cls.intent, 'REQUEST_CUSTOMER_PHONE', items, 'Khách đã có địa chỉ đủ, cần xin SĐT');
+  }
+  if (cls.contactState === 'INCOMPLETE_ADDRESS') {
+    const role = cls.hasPhone ? 'REQUEST_CUSTOMER_ADDRESS' : 'REQUEST_BOTH_CONTACTS';
+    return suggestByRole(cls.intent, role, items, 'Thông tin nhận hàng còn thiếu');
   }
 
   const scored = items

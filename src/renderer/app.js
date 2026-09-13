@@ -9,8 +9,13 @@ const SHORTCUT_RE = /^\/\d+$/; // a valid shortcut is "/" followed by digits
 
 // --- Mutable state ---
 let serverUrl = 'http://localhost:8787';
-let pancakeUrl = 'https://pages.fm/';
-let automationCode = '';
+let localApiToken = '';
+let controlPlaneStatus = { configured: false, status: 'not_configured' };
+let pancakeUrl = window.PDBPancakeUrlPolicy.DEFAULT_PANCAKE_URL;
+const PANCAKE_CHAT_URL = window.PDBPancakeUrlPolicy.PANCAKE_CHAT_URL;
+let automationProbeCode = '';
+let automationAdapterCode = '';
+let automationBootstrapCode = null;
 let settings = {};
 let shortcuts = [];
 let examplesCache = [];
@@ -23,6 +28,7 @@ let pageVisible = true;
 let reviewQueueTimer = null;   // setInterval handle while the queue tab is open
 let reviewQueueCache = [];     // last rendered pending items (kept on load error)
 const timers = [];
+const uncertainConversationBlocks = new Set();
 
 // Cap the processed-conversation cache so a long-running bot session cannot
 // grow memory without bound. Entries also expire by time (PROCESSED_TTL_MS).
@@ -45,15 +51,21 @@ function createBotRuntime(tabId) {
     currentContextMessage: '',
     autoClickRunning: false,
     autoClickLoopPromise: null,
-    autoClickProcessed: new Map()
+    autoClickProcessed: new Map(),
+    automationTransientErrorStreak: 0,
+    autoClickTransientErrorStreak: 0,
+    autoReplyPreviewRunning: false,
+    autoReplyPreviewStopping: false,
+    autoReplyPreviewLoopPromise: null,
+    autoReplyPreviewState: 'idle'
   };
 }
 
 // --- DOM refs / webview registry ---
 const webviewTabs = {
-  bot1: { id: 'bot1', label: 'Bot 1', webview: $('botView1'), botCapable: true, automationInjected: false, loaded: false, runtime: createBotRuntime('bot1') },
-  bot2: { id: 'bot2', label: 'Bot 2', webview: $('botView2'), botCapable: true, automationInjected: false, loaded: false, runtime: createBotRuntime('bot2') },
-  manual: { id: 'manual', label: 'Tab 3', webview: $('manualView'), botCapable: false, automationInjected: false, loaded: false, runtime: null }
+  bot1: { id: 'bot1', label: 'Bot 1', webview: $('botView1'), botCapable: true, automationInjected: false, loaded: false, loadState: 'idle', authState: 'ready', authLoginPending: false, authReturnUrl: '', readyHandledGeneration: -1, loadError: null, loadGeneration: 0, completedGeneration: -1, injectionGeneration: -1, expectedNavigationUrl: '', reloadGeneration: null, recovering: false, runtime: createBotRuntime('bot1') },
+  bot2: { id: 'bot2', label: 'Bot 2', webview: $('botView2'), botCapable: true, automationInjected: false, loaded: false, loadState: 'idle', authState: 'ready', authLoginPending: false, authReturnUrl: '', readyHandledGeneration: -1, loadError: null, loadGeneration: 0, completedGeneration: -1, injectionGeneration: -1, expectedNavigationUrl: '', reloadGeneration: null, recovering: false, runtime: createBotRuntime('bot2') },
+  manual: { id: 'manual', label: 'Tab 3', webview: $('manualView'), botCapable: false, automationInjected: false, loaded: false, loadState: 'idle', authState: 'ready', authLoginPending: false, authReturnUrl: '', loadError: null, loadGeneration: 0, completedGeneration: -1, injectionGeneration: -1, expectedNavigationUrl: '', reloadGeneration: null, recovering: false, runtime: null }
 };
 
 // Backward-compatible aliases for tests/older helpers that still inspect these names.
@@ -65,6 +77,9 @@ let botRunning = false;
 let botLoopPromise = null;
 let autoClickRunning = false;
 let autoClickLoopPromise = null;
+const AUTO_REPLY_PREVIEW_STORAGE_KEY = 'pdb-auto-reply-preview-settings';
+let autoReplyPreviewCode = '';
+let autoReplyPreviewStartLock = false;
 
 // --- Trợ lý gợi ý real-time (suggest-only, độc lập botLoop) ---
 let assistantEnabled = false;   // Công_Tắc_Trợ_Lý, mặc định TẮT (Req 4.2)
@@ -138,6 +153,43 @@ function anyRuntimeAutoClickRunning() {
   return Object.values(webviewTabs).some((tab) => Boolean(tab.runtime?.autoClickRunning));
 }
 
+function anyRuntimeAutoReplyPreviewRunning() {
+  return Object.values(webviewTabs).some((tab) => Boolean(tab.runtime?.autoReplyPreviewRunning || tab.runtime?.autoReplyPreviewStopping));
+}
+
+function isRuntimeAutomationActive(runtime) {
+  return Boolean(runtime?.botRunning || runtime?.autoClickRunning || runtime?.autoReplyPreviewRunning || runtime?.autoReplyPreviewStopping);
+}
+
+function anyRuntimeAutomationActive() {
+  return Object.values(webviewTabs).some((tab) => isRuntimeAutomationActive(tab.runtime));
+}
+
+function notifyMainAutomationState() {
+  if (!window.pancakeDesktop?.setBotActive) return;
+  forEachBotTab((tab) => {
+    window.pancakeDesktop.setBotActive({
+      tabId: tab.id,
+      active: isRuntimeAutomationActive(tab.runtime)
+    }).catch(() => {});
+  });
+}
+
+function reconcileHiddenPolling() {
+  if (pageVisible) return;
+  if (anyRuntimeAutomationActive()) {
+    startPolling();
+  } else {
+    stopPolling();
+    stopAssistantWatch();
+  }
+}
+
+function updateAutomationActivity() {
+  notifyMainAutomationState();
+  reconcileHiddenPolling();
+}
+
 function initTheme() {
   let theme = 'light';
   try { theme = localStorage.getItem('pdb-theme') || 'light'; } catch (_) {}
@@ -167,6 +219,27 @@ function rememberProcessedForAllBotRuntimes(key) {
   forEachBotTab((tab) => rememberProcessed(key, tab.runtime));
 }
 
+function rememberConversationProcessedEverywhere(key) {
+  const now = Date.now();
+  forEachBotTab((tab) => {
+    rememberProcessed(key, tab.runtime);
+    rememberAutoClickProcessed(key, now, tab.runtime);
+  });
+}
+
+function wasConversationProcessedAnywhere(key, now = Date.now()) {
+  return Object.values(webviewTabs).some((tab) => {
+    const runtime = tab.runtime;
+    if (!runtime) return false;
+    const botTs = runtime.processed.get(key);
+    const autoTs = runtime.autoClickProcessed.get(key);
+    return Boolean(
+      (botTs && now - botTs <= PROCESSED_TTL_MS)
+      || (autoTs && now - autoTs <= AUTOCLICK_PROCESSED_TTL_MS)
+    );
+  });
+}
+
 function toast(message, ms = 2600) {
   const el = $('toast');
   el.textContent = message;
@@ -175,11 +248,55 @@ function toast(message, ms = 2600) {
   window.__toastTimer = setTimeout(() => el.classList.add('hidden'), ms);
 }
 
+function renderControlPlaneStatus(next = {}) {
+  controlPlaneStatus = next;
+  const panel = $('accountAuth');
+  if (!panel) return;
+  panel.hidden = !next.configured;
+  if (!next.configured) return;
+  const signedIn = ['authenticated', 'online'].includes(next.status);
+  const terminal = ['disabled', 'revoked', 'error'].includes(next.status);
+  if ($('authLoginBtn')) $('authLoginBtn').hidden = signedIn || next.status === 'signing_in';
+  if ($('authLogoutBtn')) $('authLogoutBtn').hidden = !(signedIn || terminal);
+  if ($('accountEmail')) $('accountEmail').disabled = signedIn || next.status === 'signing_in';
+  if ($('accountPassword')) $('accountPassword').disabled = signedIn || next.status === 'signing_in';
+  if ($('authStatus')) $('authStatus').textContent = next.error ? `${next.status}: ${next.error}` : next.status;
+  if ($('authStatusCompact')) $('authStatusCompact').textContent = next.error ? 'Error' : (next.status || 'Offline');
+}
+
+async function loadControlPlaneStatus() {
+  if (!window.pancakeDesktop?.getAuthStatus) return;
+  try { renderControlPlaneStatus(await window.pancakeDesktop.getAuthStatus()); }
+  catch (error) { renderControlPlaneStatus({ configured: true, status: 'error', error: error.message }); }
+}
+
+async function signInOperator() {
+  const email = $('accountEmail')?.value.trim();
+  const password = $('accountPassword')?.value || '';
+  if (!email || !password) return toast('Enter operator email and password', 4000);
+  try {
+    renderControlPlaneStatus({ ...controlPlaneStatus, status: 'signing_in', error: '' });
+    renderControlPlaneStatus(await window.pancakeDesktop.login({ email, password }));
+    if ($('accountPassword')) $('accountPassword').value = '';
+    toast('Operator signed in');
+  } catch (error) {
+    renderControlPlaneStatus({ ...controlPlaneStatus, status: 'error', error: error.message });
+    toast(error.message, 5000);
+  }
+}
+
+async function signOutOperator() {
+  try {
+    renderControlPlaneStatus(await window.pancakeDesktop.logout());
+    toast('Operator signed out');
+  } catch (error) { toast(error.message, 5000); }
+}
 async function api(path, options = {}) {
   const res = await fetch(`${serverUrl}${path}`, {
     ...options,
     headers: {
       ...(options.body instanceof FormData ? {} : { 'Content-Type': 'application/json' }),
+      ...(localApiToken ? { 'x-local-api-token': localApiToken } : {}),
       ...(options.headers || {})
     }
   });
@@ -198,6 +315,66 @@ async function log(level, type, message, data = null) {
 
 function getTab(tabId = activeWvTab) {
   return webviewTabs[tabId] || webviewTabs.bot1;
+}
+
+function normalizePancakeBotUrl(url = pancakeUrl) {
+  if (window.PDBPancakeUrlPolicy.classifyPancakeUrl(url) === 'auth') {
+    return String(url || '').trim();
+  }
+  return window.PDBPancakeUrlPolicy.normalizeBotUrl(url) || PANCAKE_CHAT_URL;
+}
+
+function navigateWebview(tab, url) {
+  if (!tab?.webview) return;
+  const targetUrl = tab.botCapable ? normalizePancakeBotUrl(url) : url;
+  const currentUrl = safeGetURL(tab.webview, tab.webview.src || '');
+  const useSrcAssignment = window.PDBWebviewTabNavigation?.isBlankWebviewUrl(currentUrl);
+  if (useSrcAssignment) {
+    tab.loaded = false;
+    tab.loadState = 'loading';
+    tab.loadError = null;
+    tab.automationInjected = false;
+    tab.injectionGeneration = -1;
+    tab.loadGeneration += 1;
+    tab.reloadGeneration = null;
+    tab.pendingNavigationToken = null;
+    tab.expectedNavigationUrl = targetUrl;
+    tab.webview.src = targetUrl;
+  } else if (window.PDBWebviewAutomation?.startTrackedNavigation && typeof tab.webview.loadURL === 'function') {
+    window.PDBWebviewAutomation.startTrackedNavigation(tab, targetUrl);
+  } else {
+    tab.loaded = false;
+    tab.loadState = 'loading';
+    tab.loadError = null;
+    tab.automationInjected = false;
+    tab.injectionGeneration = -1;
+    tab.loadGeneration += 1;
+    tab.reloadGeneration = null;
+    tab.expectedNavigationUrl = targetUrl;
+    tab.webview.src = targetUrl;
+  }
+  if (tab.id === activeWvTab && $('urlInput')) $('urlInput').value = targetUrl;
+  return targetUrl;
+}
+
+async function reloadActiveWebview() {
+  const tab = getTab(activeWvTab);
+  const targetUrl = safeGetURL(tab.webview, tab.expectedNavigationUrl || tab.webview?.src || pancakeUrl);
+  const result = window.PDBWebviewAutomation?.startTrackedReload
+    ? window.PDBWebviewAutomation.startTrackedReload(tab, { targetUrl, fallbackUrl: pancakeUrl })
+    : { ok: false, code: 'WEBVIEW_NOT_READY', reason: 'reload helper unavailable' };
+
+  if (!result.ok) {
+    const message = result.code === 'WEBVIEW_NOT_READY'
+      ? 'Webview đang tải, chưa thể reload'
+      : `Reload webview lỗi: ${serializeError(result.error || result.reason)}`;
+    if ($('webviewStatus')) $('webviewStatus').textContent = message;
+    toast(message, result.code === 'WEBVIEW_NOT_READY' ? 2200 : 5000);
+    return result;
+  }
+
+  if ($('webviewStatus')) $('webviewStatus').textContent = 'Đang tải...';
+  return result;
 }
 
 function getActiveBotRuntime() {
@@ -227,6 +404,50 @@ function serializeError(error) {
   return parts.join(' | ') || String(error);
 }
 
+function isTransientAutomationError(error) {
+  if (window.PDBWebviewAutomation?.isTransientGuestViewError) {
+    return window.PDBWebviewAutomation.isTransientGuestViewError(error);
+  }
+  return /GUEST_VIEW_MANAGER_CALL|Script failed to execute|\[object Object\]|webview.*(loading|destroyed)/i.test(serializeError(error));
+}
+
+// The loop stopped because an action may already have taken effect in Pancake.
+// Name the action so the admin knows what to verify instead of only seeing that
+// the bot went quiet.
+async function logUncertainStop(runtime, type, method) {
+  const safeMethod = /^[A-Za-z]{1,64}$/.test(String(method || '')) ? String(method) : '';
+  const detail = safeMethod ? ` (${safeMethod})` : '';
+  await log('ERROR', type, prefixRuntime(runtime, `Automation stopped: uncertain action requires review${detail}`));
+  toast(
+    safeMethod
+      ? `${getRuntimeLabel(runtime)} đã dừng: "${safeMethod}" có thể đã chạy — hãy kiểm tra hội thoại trước khi bật lại.`
+      : `${getRuntimeLabel(runtime)} đã dừng: một hành động có thể đã chạy — hãy kiểm tra hội thoại trước khi bật lại.`,
+    8000
+  );
+}
+
+// A guest console error recorded within this window of the failure is treated as
+// its cause; anything older is unrelated noise from normal Pancake activity.
+const GUEST_CONSOLE_CORRELATION_MS = 5000;
+
+function getGuestConsoleHint(runtime) {
+  const recorded = getTab(runtime?.tabId)?.lastGuestConsoleError;
+  if (!recorded) return '';
+  if (Date.now() - recorded.at > GUEST_CONSOLE_CORRELATION_MS) return '';
+  return `${recorded.text}${recorded.source ? ` @ ${recorded.source}` : ''}`;
+}
+
+async function logTransientAutomationError(runtime, type, error, streak) {
+  const level = streak >= 3 ? 'ERROR' : 'WARN';
+  const errorCode = String(error?.code || 'TRANSIENT_GUEST_ERROR');
+  // Electron only surfaces "Script failed to execute" here, so attach the guest's
+  // own console error when one landed alongside it.
+  const guestHint = getGuestConsoleHint(runtime);
+  const message = prefixRuntime(runtime, `Transient webview automation error (${streak}): ${errorCode}${guestHint ? ` | guest: ${guestHint}` : ''}`);
+  await log(level, type, message);
+  if (level === 'ERROR') toast(`${getRuntimeLabel(runtime)} webview automation lỗi liên tiếp: ${errorCode}`, 5000);
+}
+
 function getWebviewReadiness(tab) {
   const wv = tab?.webview;
   if (!wv) return { ok: false, reason: 'Thiếu webview' };
@@ -237,17 +458,85 @@ function getWebviewReadiness(tab) {
   return { ok: true, reason: '' };
 }
 
+async function waitForTabReady(tab, label) {
+  if (window.PDBWebviewAutomation?.waitForWebviewReady) {
+    return window.PDBWebviewAutomation.waitForWebviewReady(tab, {
+      label,
+      timeoutMs: window.PDBWebviewAutomation.DEFAULT_WEBVIEW_READY_TIMEOUT_MS || 15000,
+      generation: tab.loadGeneration
+    });
+  }
+  if (!tab.loaded) throw new Error(`${tab.label}: ${label} webview loading`);
+  return true;
+}
+
+async function recoverTabAfterReadTimeout(tab, label) {
+  if (tab.recovering) return waitForTabReady(tab, label);
+  tab.recovering = true;
+  try {
+    const targetUrl = safeGetURL(tab.webview, tab.expectedNavigationUrl || tab.webview.src || '');
+    if (window.PDBWebviewAutomation?.startTrackedNavigation && typeof tab.webview.loadURL === 'function') {
+      window.PDBWebviewAutomation.startTrackedNavigation(tab, targetUrl);
+    } else {
+      tab.loaded = false;
+      tab.loadState = 'loading';
+      tab.automationInjected = false;
+      tab.injectionGeneration = -1;
+      tab.loadGeneration += 1;
+      tab.webview.reload();
+    }
+    await waitForTabReady(tab, `${label}:recovery`);
+  } finally {
+    tab.recovering = false;
+  }
+}
+
 async function executeInTab(tabId, js, label = 'executeJavaScript') {
   const tab = getTab(tabId);
   const wv = tab.webview;
   const ready = getWebviewReadiness(tab);
   if (!ready.ok) throw new Error(`${tab.label}: ${ready.reason}`);
+  let dispatched = false;
   try {
-    return await wv.executeJavaScript(js, false);
+    const run = async () => {
+      await waitForTabReady(tab, label);
+      dispatched = true;
+      return wv.executeJavaScript(js, false);
+    };
+    if (window.PDBWebviewAutomation?.executeWithRetry) {
+      return await window.PDBWebviewAutomation.executeWithRetry(run, {
+        tabId: tab.id,
+        method: label,
+        timeoutMs: window.PDBWebviewAutomation.DEFAULT_AUTOMATION_TIMEOUT_MS || 15000,
+        onBeforeRetry: async ({ error }) => {
+          if (error?.code === 'AUTOMATION_TIMEOUT') {
+            await recoverTabAfterReadTimeout(tab, label);
+          }
+          if (label === 'injectAutomation') return;
+          tab.automationInjected = false;
+          tab.injectionGeneration = -1;
+          await injectAutomation(tab.id);
+        }
+      });
+    }
+    return await run();
   } catch (error) {
-    let url = '';
-    try { url = safeGetURL(wv, wv.src || ''); } catch (_) {}
-    throw new Error(`${tab.label}: ${label} lỗi (${tab.loaded ? 'loaded' : 'loading'}${url ? `, url=${url}` : ''}) - ${serializeError(error)}`);
+    const wrapped = new Error(`${tab.label}: ${label} lỗi (${tab.loaded ? 'loaded' : 'loading'}), code=${String(error?.code || 'AUTOMATION_EXECUTION_FAILED')}`);
+    wrapped.code = error?.code || 'AUTOMATION_EXECUTION_FAILED';
+    wrapped.cause = error;
+    // Only a non-idempotent action leaves the page in an unknown state after a
+    // failed dispatch, so only those stop the loop for review. Replaying
+    // clickConversationById/setReplyText/applyTagByName is harmless, and
+    // treating their transient failures as uncertain was stopping the bot for
+    // errors that had no effect on Pancake.
+    if (dispatched
+      && window.PDBWebviewAutomation?.isActionMethod?.(label)
+      && !window.PDBWebviewAutomation?.isIdempotentActionMethod?.(label)) {
+      wrapped.uncertain = true;
+      wrapped.dispatched = true;
+      wrapped.uncertainMethod = label;
+    }
+    throw wrapped;
   }
 }
 
@@ -255,21 +544,87 @@ async function executeInPancake(js) {
   return executeInTab('bot1', js);
 }
 
+async function loadAutomationProbeCode() {
+  if (automationProbeCode) return automationProbeCode;
+  if (!automationBootstrapCode) {
+    const [policyCode, domCode] = await Promise.all([
+      fetch('pancakeUrlPolicy.js').then((response) => response.text()),
+      fetch('pancakeDom.js').then((response) => response.text())
+    ]);
+    automationBootstrapCode = Object.freeze({ policyCode, domCode });
+  }
+  automationProbeCode = window.PDBPancakeAutomationPayload.buildProbePayload(automationBootstrapCode);
+  return automationProbeCode;
+}
+
+async function loadAutomationAdapterCode() {
+  if (automationAdapterCode) return automationAdapterCode;
+  await loadAutomationProbeCode();
+  const adapterCode = await fetch('automation.js').then((response) => response.text());
+  automationAdapterCode = window.PDBPancakeAutomationPayload.buildAdapterPayload({
+    ...automationBootstrapCode,
+    adapterCode
+  });
+  return automationAdapterCode;
+}
+
+async function loadAutoReplyPreviewCode() {
+  if (!autoReplyPreviewCode) autoReplyPreviewCode = await fetch('autoReplyPreview.js').then((response) => response.text());
+  return autoReplyPreviewCode;
+}
+
+async function previewCall(tabId, expression, label) {
+  const code = await loadAutoReplyPreviewCode();
+  const ensure = `if (!window.PDBAutoReplyPreviewController) { ${code} }`;
+  return executeInTab(tabId, `${ensure}\n${expression}`, label);
+}
+
 async function injectAutomation(tabId = activeWvTab) {
   const tab = getTab(tabId);
   if (!tab.botCapable) throw new Error('Tab này không hỗ trợ bot');
-  if (!automationCode) automationCode = await fetch('automation.js').then((r) => r.text());
   // automation.js is idempotent (guards on window.__PDB__), but skip the
   // executeJavaScript round-trip entirely once injected for this page load.
-  if (tab.automationInjected) return true;
-  await executeInTab(tab.id, automationCode, 'injectAutomation');
-  tab.automationInjected = true;
-  return true;
+  if (tab.automationInjected && tab.injectionGeneration === tab.loadGeneration) return true;
+  return window.PDBPancakeAutomationGate.prepareAutomation({
+    tabLabel: tab.label,
+    waitUntilReady: () => waitForTabReady(tab, 'injectAutomation'),
+    getUrl: () => safeGetURL(tab.webview, tab.webview.src || ''),
+    classifyUrl: window.PDBPancakeUrlPolicy.classifyPancakeUrl,
+    probePage: async () => executeInTab(
+      tab.id,
+      await loadAutomationProbeCode(),
+      'injectAutomation'
+    ),
+    injectAutomation: async () => {
+      const dispatchGeneration = tab.loadGeneration;
+      const result = await executeInTab(tab.id, await loadAutomationAdapterCode(), 'injectAutomation');
+      if (window.PDBPancakeAutomationPayload.isBlockedResult(result)) return result;
+      if (!window.PDBPancakeAutomationPayload.canCommitAdapterResult(result, {
+        expectedGeneration: dispatchGeneration,
+        currentGeneration: tab.loadGeneration,
+        loaded: tab.loaded
+      })) {
+        const error = new Error(`${tab.label}: navigation changed during automation injection`);
+        error.code = 'AUTOMATION_NAVIGATION_RACE';
+        throw error;
+      }
+      tab.automationInjected = true;
+      tab.injectionGeneration = dispatchGeneration;
+      return true;
+    }
+  });
+}
+
+function createAuthRequiredError(tab) {
+  const error = new Error(`${tab.label}: cần đăng nhập Pancake`);
+  error.code = window.PDBPancakeAutomationGate.ERROR_CODES.AUTH_REQUIRED;
+  return error;
 }
 
 async function botCallForTab(tabId, method, ...args) {
   const tab = getTab(tabId);
   if (!tab.botCapable) throw new Error('Tab này không hỗ trợ bot');
+  if (tab.authState === 'required') throw createAuthRequiredError(tab);
   await injectAutomation(tabId);
   const argJson = JSON.stringify(args);
   return executeInTab(tabId, `window.__PDB__.${method}.apply(window.__PDB__, ${argJson})`, method);
@@ -337,16 +692,26 @@ async function loadSettings() {
   $('botEnabled').checked = Boolean(settings.botEnabled);
   $('autoSend').checked = Boolean(settings.autoSend);
   $('shortcutOnlyMode').checked = settings.shortcutOnlyMode !== false;
+  if ($('buyTtsEnabled')) $('buyTtsEnabled').checked = settings.buyTtsEnabled !== false;
+  if ($('buyTtsDebounceMs')) $('buyTtsDebounceMs').value = settings.buyTtsDebounceMs || 1500;
   if ($('learnExamplesEnabled')) $('learnExamplesEnabled').checked = settings.learnExamplesEnabled !== false;
   $('newCustomerShortcut').value = settings.defaultNewCustomerShortcut || '/1';
   $('newCustomerTag').value = settings.newCustomerTagName || 'Saruto Mới';
   $('buyTag').value = settings.buyTagName || 'Mua hàng';
   $('minConfidence').value = settings.minConfidence || 0.75;
   if ($('autoClickDelayMs')) $('autoClickDelayMs').value = settings.autoClickDelayMs || 3000;
+  renderAutoReplyPreviewSettings();
   refreshActiveTabRuntimeUi();
 }
 
 async function saveSettingsFromUi() {
+  const buyTtsDebounceInput = $('buyTtsDebounceMs');
+  const parsedBuyTtsDebounceMs = Number((buyTtsDebounceInput && buyTtsDebounceInput.value) || 1500);
+  const buyTtsDebounceMs = Number.isFinite(parsedBuyTtsDebounceMs) && parsedBuyTtsDebounceMs >= 300
+    ? parsedBuyTtsDebounceMs
+    : 1500;
+  if (buyTtsDebounceInput) buyTtsDebounceInput.value = buyTtsDebounceMs;
+
   settings = await api('/api/settings', {
     method: 'POST',
     body: JSON.stringify({
@@ -356,6 +721,8 @@ async function saveSettingsFromUi() {
       defaultNewCustomerShortcut: $('newCustomerShortcut').value.trim() || '/1',
       newCustomerTagName: $('newCustomerTag').value.trim() || 'Saruto Mới',
       buyTagName: $('buyTag').value.trim() || 'Mua hàng',
+      buyTtsEnabled: $('buyTtsEnabled') ? $('buyTtsEnabled').checked : true,
+      buyTtsDebounceMs,
       minConfidence: Number($('minConfidence').value || 0.75),
       autoClickEnabled: Boolean(($('autoClickEnabled') && $('autoClickEnabled').checked) || anyRuntimeAutoClickRunning()),
       autoClickDelayMs: Number(($('autoClickDelayMs') && $('autoClickDelayMs').value) || 3000),
@@ -812,6 +1179,42 @@ async function fillShortcut(shortcut) {
   toast(result.ok ? `Đã điền ${shortcut}${source ? ' + đã học' : ''}` : result.message || 'Không điền được');
 }
 
+function openLoginInTab(tab, { force = false } = {}) {
+  if (!tab?.webview) return false;
+  const currentUrl = safeGetURL(tab.webview, tab.webview?.src || '');
+  const currentKind = window.PDBPancakeUrlPolicy.classifyPancakeUrl(currentUrl);
+  if (!force && currentKind === 'auth') return false;
+  if (!force && tab.authLoginPending) return false;
+  const resolveChatEntry = window.PDBPancakeUrlPolicy.resolveChatEntryUrl;
+  const returnUrl = typeof resolveChatEntry === 'function'
+    ? (resolveChatEntry(currentUrl) || resolveChatEntry(pancakeUrl))
+    : '';
+  if (returnUrl) tab.authReturnUrl = returnUrl;
+  tab.authLoginPending = true;
+  tab.authState = 'transition';
+  navigateWebview(tab, window.PDBPancakeUrlPolicy.PANCAKE_LOGIN_URL);
+  if (tab.id === activeWvTab && $('webviewStatus')) {
+    $('webviewStatus').textContent = 'Đang mở trang đăng nhập Pancake...';
+  }
+  return true;
+}
+
+function showAuthRequiredState(tab, error, { openLogin = false } = {}) {
+  if (tab) tab.authState = 'required';
+  if (openLogin) openLoginInTab(tab);
+  if (tab?.id !== activeWvTab) return;
+  const message = error?.message || `${tab.label}: cần đăng nhập Pancake`;
+  $('domSummary').textContent = message;
+  $('unreadCount').textContent = '0';
+  if ($('webviewStatus')) $('webviewStatus').textContent = message;
+  const badge = $('safetyState');
+  if (badge) {
+    badge.textContent = 'Đăng nhập';
+    badge.className = 'badge offline';
+  }
+  if ($('pancakeLoginBtn')) $('pancakeLoginBtn').hidden = false;
+}
+
 async function updateDomSummary(tabId = activeWvTab) {
   const tab = getTab(tabId);
   if (!tab.botCapable) {
@@ -829,6 +1232,10 @@ async function updateDomSummary(tabId = activeWvTab) {
     else setSafetyState(health.level === 'FAIL' ? 'Fail-safe' : 'Warn', 'warn', (health.missing || []).join(', ') || 'DOM chưa đủ điều kiện');
     return status;
   } catch (error) {
+    if (window.PDBPancakeAutomationGate.isAuthRequiredError(error)) {
+      showAuthRequiredState(tab, error);
+      return null;
+    }
     $('domSummary').textContent = error.message;
     setSafetyState('Fail-safe', 'warn', error.message);
     return null;
@@ -848,6 +1255,53 @@ function isBlankShortcut(s) { return s == null || String(s).trim() === ''; }
 
 async function getPancakeUrl(tabId = activeWvTab) {
   try { return await executeInTab(tabId, 'location.href'); } catch { return ''; }
+}
+
+async function ensureBotChatPage(runtime) {
+  const tab = getTab(runtime?.tabId);
+  if (!tab.botCapable) throw new Error('Tab này không hỗ trợ bot');
+
+  await waitForTabReady(tab, 'openPancakeChat');
+  let currentUrl = safeGetURL(tab.webview, tab.webview.src || '');
+  const isBlankUrl = window.PDBWebviewTabNavigation?.isBlankWebviewUrl?.(currentUrl);
+  if (!currentUrl || isBlankUrl) {
+    const defaultChatUrl = normalizePancakeBotUrl(pancakeUrl);
+    if (defaultChatUrl) {
+      navigateWebview(tab, defaultChatUrl);
+      await waitForTabReady(tab, 'openPancakeChat');
+      currentUrl = safeGetURL(tab.webview, defaultChatUrl);
+    }
+  }
+
+  try {
+    await injectAutomation(tab.id);
+  } catch (error) {
+    if (window.PDBPancakeAutomationGate.isAuthRequiredError(error)) {
+      showAuthRequiredState(tab, error, { openLogin: true });
+      throw error;
+    }
+    const resolveChatEntry = window.PDBPancakeUrlPolicy.resolveChatEntryUrl;
+    const chatEntryUrl = typeof resolveChatEntry === 'function'
+      ? resolveChatEntry(currentUrl)
+      : '';
+    if (error?.code !== 'WRONG_PANCAKE_PAGE' || !chatEntryUrl || currentUrl === chatEntryUrl) {
+      throw error;
+    }
+    if (activeWvTab === tab.id) $('webviewStatus').textContent = 'Đang mở trang chat Pancake...';
+    navigateWebview(tab, chatEntryUrl);
+    await waitForTabReady(tab, 'openPancakeChat');
+    currentUrl = safeGetURL(tab.webview, chatEntryUrl);
+    await injectAutomation(tab.id);
+  }
+
+  const status = await botCallForTab(tab.id, 'getDomStatus');
+  if (status && status.isChatPage === false) {
+    const safeUrl = window.PDBPancakeAutomationGate.sanitizeUrl(status.url || currentUrl || pancakeUrl);
+    const error = new Error(`${tab.label}: đang ở sai trang Pancake (${status.pageKind || 'unknown'})${safeUrl ? `, url=${safeUrl}` : ''}`);
+    error.code = 'WRONG_PANCAKE_PAGE';
+    throw error;
+  }
+  return status;
 }
 
 async function postQueueWithRetry(body) {
@@ -889,23 +1343,23 @@ async function enqueueReviewCase({ info, customerName, message, analysis, runtim
 
 async function processOneConversation(runtime = getActiveBotRuntime()) {
   if (!runtime) return { ok: false, message: 'Tab này không hỗ trợ bot' };
-  const call = (method, ...args) => botCallForTab(runtime.tabId, method, ...args);
-  const unread = await call('getUnreadConversations');
-  if (runtime.tabId === activeWvTab) $('unreadCount').textContent = unread.length;
+  const rawCall = (method, ...args) => botCallForTab(runtime.tabId, method, ...args);
+  const unreadResult = await rawCall('getUnreadConversations');
+  const unread = Array.isArray(unreadResult) ? unreadResult : (unreadResult?.items || []);
+  const rawCount = Array.isArray(unreadResult) ? unread.length : Number(unreadResult?.rawCount || 0);
+  if (runtime.tabId === activeWvTab) $('unreadCount').textContent = rawCount;
+  if (unreadResult?.degraded) {
+    await log('WARN', 'BOT', prefixRuntime(runtime, `DOM unread degraded: raw=${rawCount}, usable=${unread.length}, malformed=${unreadResult.malformedCount || 0}`));
+    return { ok: false, code: 'DOM_DEGRADED', degraded: true };
+  }
   if (!unread.length) return { ok: true, idle: true, message: 'Không có khách chưa đọc' };
 
   let first = null;
   let key = '';
-  const claims = window.PDBConversationClaims;
   for (const candidate of unread) {
     const candidateKey = makeDedupeKey(candidate);
-    const last = runtime.processed.get(candidateKey);
-    if (last && Date.now() - last < PROCESSED_TTL_MS) {
+    if (wasConversationProcessedAnywhere(candidateKey)) {
       await log('WARN', 'BOT', prefixRuntime(runtime, `Bỏ qua vì mới xử lý: ${candidate.name}`));
-      continue;
-    }
-    if (claims && !claims.claimConversation(candidateKey, runtime)) {
-      await log('WARN', 'BOT', prefixRuntime(runtime, `Bỏ qua vì bot khác đang xử lý: ${candidate.name}`));
       continue;
     }
     first = candidate;
@@ -913,18 +1367,51 @@ async function processOneConversation(runtime = getActiveBotRuntime()) {
     break;
   }
   if (!first) return { ok: true, skipped: true, message: 'Không có khách chưa đọc khả dụng' };
-  rememberProcessedForAllBotRuntimes(key);
 
+  const coordinator = createClickCoordinator('BOT');
+  const processingJob = {
+    key,
+    conversationId: first.id,
+    runtime,
+    stage: 'clickConversationById',
+    performAction: () => rawCall('clickConversationById', first.id),
+    deferCompletion: true
+  };
+  const clickResult = await coordinator.process(processingJob);
+  if (!clickResult.ok) return clickResult;
+  const info = clickResult.info;
+  const call = async (method, ...args) => {
+    try {
+      if (!coordinator.refreshDeferred(processingJob)) {
+        const error = new Error('Conversation claim ownership was lost');
+        error.code = 'CLAIM_LOST';
+        throw error;
+      }
+      return await rawCall(method, ...args);
+    } catch (error) {
+      error.processingStage = method;
+      throw error;
+    }
+  };
   try {
-  const info = await call('clickConversationById', first.id);
+  const outcome = await (async () => {
   await sleep(900);
+  const effectiveInfo = await window.PDBBotDecision.readEffectiveConversationInfo({
+    info,
+    readCurrentTags: () => call('getCurrentTags'),
+    onWarning: async (error) => {
+      await log('WARN', 'BOT', prefixRuntime(runtime, 'Không đọc được tag hiện tại; dùng tag từ danh sách'), {
+        error: serializeError(error)
+      });
+    }
+  });
   const customerName = await call('getCurrentCustomerName');
   const message = info.snippet || first.snippet || '';
   runtime.lastCustomerMessage = message;
   setActiveRuntimeMessages(runtime);
 
   const lastSender = await call('getLastMessageSender');
-  const preDecision = window.PDBBotDecision.decideBeforeAnalysis({ info, lastSender, settings });
+  const preDecision = window.PDBBotDecision.decideBeforeAnalysis({ info: effectiveInfo, lastSender, settings });
 
   if (preDecision.action === 'NEW_CUSTOMER' || preDecision.action === 'NEW_CUSTOMER_TAGGED_ONLY_HUMAN_REPLY') {
     const health = await getDomHealthSafe(runtime);
@@ -978,7 +1465,7 @@ async function processOneConversation(runtime = getActiveBotRuntime()) {
 
   const analysis = await api('/api/ai/analyze-message', {
     method: 'POST',
-    body: JSON.stringify({ customerMessage: message, customerName, currentTags: info.tags || [], conversationHistory, orderStatus, context: { source: 'electron-webview', tabId: runtime.tabId } })
+    body: JSON.stringify({ customerMessage: message, customerName, currentTags: effectiveInfo.tags || [], conversationHistory, orderStatus, context: { source: 'electron-webview', tabId: runtime.tabId } })
   });
   runtime.lastAnalysis = analysis;
   if (runtime.tabId === activeWvTab) renderAnalysis(analysis);
@@ -1015,6 +1502,18 @@ async function processOneConversation(runtime = getActiveBotRuntime()) {
     const contactNote = [ci.phone ? `SĐT ${ci.phone}` : '', ci.address ? `ĐC: ${ci.address}` : ''].filter(Boolean).join(' | ');
     setRuntimeLastDecision(runtime, postDecision.action);
     await log('SUCCESS', 'BOT', prefixRuntime(runtime, `Khách mua hàng/escalate: ${customerName || info.name}${contactNote ? ' — ' + contactNote : ''}`), { message, analysis, postDecision });
+    try {
+      if (window.PDBBuyTtsNotifier) {
+        window.PDBBuyTtsNotifier.notifyBuyCustomer({
+          customerName: customerName || info.name || '',
+          phone: ci.phone || '',
+          address: ci.address || '',
+          message,
+          tabId: runtime.tabId,
+          conversationId: info.id || info.conversationId || ''
+        }, settings);
+      }
+    } catch (_) {}
     if (postDecision.shouldNotifyBuy) {
       try {
         const notifyResult = await api('/api/notify/buy', {
@@ -1067,8 +1566,25 @@ async function processOneConversation(runtime = getActiveBotRuntime()) {
     await log('INFO', 'BOT', prefixRuntime(runtime, `Đã điền ${postDecision.shortcut}, chờ duyệt`), { message, analysis, postDecision });
   }
   return { ok: true, action: 'SHORTCUT', analysis };
-  } finally {
-    if (claims && key) claims.releaseConversationClaim(key, runtime);
+  })();
+  if (!outcome?.ok) {
+    return await coordinator.failDeferred(
+      { ...processingJob, stage: outcome?.stage || 'postClick' },
+      { code: outcome?.code || 'POST_CLICK_FAILURE' }
+    );
+  }
+  if (!coordinator.completeDeferred(processingJob, { commit: true })) {
+    return coordinator.failDeferred(
+      { ...processingJob, stage: 'postClick' },
+      { code: 'CLAIM_LOST' }
+    );
+  }
+  return outcome;
+  } catch (error) {
+    return coordinator.failDeferred(
+      { ...processingJob, stage: error?.processingStage || 'postClick' },
+      { code: error?.code || 'POST_CLICK_FAILURE' }
+    );
   }
 }
 
@@ -1077,28 +1593,55 @@ async function processOneConversation(runtime = getActiveBotRuntime()) {
 // để không lẫn vào computeBotStats (chỉ lọc type 'BOT').
 async function processOneAutoClick(runtime = getActiveBotRuntime()) {
   if (!runtime) return { ok: false, message: 'Tab này không hỗ trợ Auto Click' };
-  const call = (method, ...args) => botCallForTab(runtime.tabId, method, ...args);
+  const rawCall = (method, ...args) => botCallForTab(runtime.tabId, method, ...args);
   // --- Task 4.1: lấy danh sách + chọn khách + dedupe ---
-  const unread = await call('getUnreadConversations');
+  const unreadResult = await rawCall('getUnreadConversations');
+  const unread = Array.isArray(unreadResult) ? unreadResult : (unreadResult?.items || []);
+  const rawCount = Array.isArray(unreadResult) ? unread.length : Number(unreadResult?.rawCount || 0);
   // Cập nhật badge best-effort: không để thiếu phần tử làm sập vòng lặp.
   try {
     const badge = $('unreadCount');
-    if (badge && runtime.tabId === activeWvTab) badge.textContent = unread.length;
+    if (badge && runtime.tabId === activeWvTab) badge.textContent = rawCount;
   } catch (_) {}
+
+  if (unreadResult?.degraded) {
+    await log('WARN', 'AUTOCLICK', prefixRuntime(runtime, `DOM unread degraded: raw=${rawCount}, usable=${unread.length}, malformed=${unreadResult.malformedCount || 0}`));
+    return { ok: false, code: 'DOM_DEGRADED', degraded: true };
+  }
 
   // Danh sách rỗng → idle, không gắn thẻ/gửi (Req 3.2).
   if (!unread.length) return { ok: true, idle: true, action: 'IDLE' };
 
-  const first = unread[0];                       // Req 3.3 — khách đầu hàng đợi
+  const first = unread.find((candidate) => !wasConversationProcessedAnywhere(makeDedupeKey(candidate)));
+  if (!first) return { ok: true, skipped: true, action: 'SKIPPED_RECENT' };
   const key = makeDedupeKey(first);              // Req 7.1
-  const last = runtime.autoClickProcessed.get(key);
-  if (last && Date.now() - last <= AUTOCLICK_PROCESSED_TTL_MS) {  // Req 7.2
-    await log('INFO', 'AUTOCLICK', prefixRuntime(runtime, `Bỏ qua (mới xử lý): ${first.name}`));
-    return { ok: true, skipped: true, action: 'SKIPPED_RECENT' };
-  }
-  rememberAutoClickProcessed(key, Date.now(), runtime);               // Req 7.3
-
-  const info = await call('clickConversationById', first.id);  // Req 3.3
+  const coordinator = createClickCoordinator('AUTOCLICK');
+  const processingJob = {
+    key,
+    conversationId: first.id,
+    runtime,
+    stage: 'clickConversationById',
+    performAction: () => rawCall('clickConversationById', first.id),
+    deferCompletion: true
+  };
+  const clickResult = await coordinator.process(processingJob);
+  if (!clickResult.ok) return clickResult;
+  const info = clickResult.info;
+  const call = async (method, ...args) => {
+    try {
+      if (!coordinator.refreshDeferred(processingJob)) {
+        const error = new Error('Conversation claim ownership was lost');
+        error.code = 'CLAIM_LOST';
+        throw error;
+      }
+      return await rawCall(method, ...args);
+    } catch (error) {
+      error.processingStage = method;
+      throw error;
+    }
+  };
+  try {
+  const outcome = await (async () => {
   await sleep(700);
 
   // --- Task 4.2: bỏ qua khi đã có thẻ ---
@@ -1122,7 +1665,10 @@ async function processOneAutoClick(runtime = getActiveBotRuntime()) {
   let tagResult;
   try {
     tagResult = health.canTag ? await call('applyTagByName', newTag) : { ok: false, message: 'DOM thiếu tag controls' };
-  } catch (_) {
+  } catch (error) {
+    if (error?.uncertain || error?.dispatched) {
+      return { ok: false, code: 'UNCERTAIN', uncertain: true, stage: 'applyTagByName' };
+    }
     tagResult = { ok: false };
   }
   if (!tagResult || !tagResult.ok) {
@@ -1136,16 +1682,41 @@ async function processOneAutoClick(runtime = getActiveBotRuntime()) {
   try {
     const sendRes = await call('clickSendButton');
     if (!sendRes || !sendRes.ok) {
-      await log('WARN', 'AUTOCLICK', prefixRuntime(runtime, `Gửi ${shortcut} thất bại cho ${customerName || info.name}`));
+      await log('WARN', 'AUTOCLICK', prefixRuntime(runtime, `Gửi shortcut thất bại`));
+      return { ok: false, code: 'SEND_FAILED' };
     }
-  } catch (_) {
+  } catch (error) {
+    if (error?.uncertain || error?.dispatched) {
+      return { ok: false, code: 'UNCERTAIN', uncertain: true, stage: 'clickSendButton' };
+    }
     await log('WARN', 'AUTOCLICK', prefixRuntime(runtime, `Gửi ${shortcut} thất bại cho ${customerName || info.name}`));
+    return { ok: false, code: 'SEND_FAILED' };
   }
 
   // Tổng kết khách mới (Req 5.7).
   setRuntimeLastDecision(runtime, 'AUTOCLICK_NEW_CUSTOMER');
   await log('SUCCESS', 'AUTOCLICK', prefixRuntime(runtime, `Khách mới: ${customerName || info.name} → ${tagResult?.ok ? newTag + ' + ' : ''}${shortcut}`), { message: info.snippet });
   return { ok: true, action: 'NEW_CUSTOMER', shortcut, tagged: Boolean(tagResult?.ok) };
+  })();
+  if (!outcome?.ok) {
+    return await coordinator.failDeferred(
+      { ...processingJob, stage: outcome?.stage || 'postClick' },
+      { code: outcome?.code || 'POST_CLICK_FAILURE' }
+    );
+  }
+  if (!coordinator.completeDeferred(processingJob, { commit: true })) {
+    return coordinator.failDeferred(
+      { ...processingJob, stage: 'postClick' },
+      { code: 'CLAIM_LOST' }
+    );
+  }
+  return outcome;
+  } catch (error) {
+    return coordinator.failDeferred(
+      { ...processingJob, stage: error?.processingStage || 'postClick' },
+      { code: error?.code || 'POST_CLICK_FAILURE' }
+    );
+  }
 }
 
 async function botLoop(runtime) {
@@ -1159,17 +1730,67 @@ async function botLoop(runtime) {
         await sleep(settings.scanIntervalMs || 2500);
         continue;
       }
-      await processOneConversation(runtime);
+      const result = await processOneConversation(runtime);
+      if (result?.uncertain || result?.code === 'UNCERTAIN') {
+        runtime.botRunning = false;
+        await logUncertainStop(runtime, 'BOT', result?.stage || result?.uncertainMethod);
+        break;
+      }
       if (runtime.tabId === activeWvTab) await updateDomSummary(runtime.tabId);
+      runtime.automationTransientErrorStreak = 0;
       await sleep(settings.processDelayMs || 3000);
     } catch (error) {
+      if (error?.uncertain || error?.dispatched) {
+        runtime.botRunning = false;
+        await logUncertainStop(runtime, 'BOT', error?.uncertainMethod || error?.processingStage);
+        break;
+      }
+      if (isTransientAutomationError(error)) {
+        runtime.automationTransientErrorStreak = (runtime.automationTransientErrorStreak || 0) + 1;
+        await logTransientAutomationError(runtime, 'BOT', error, runtime.automationTransientErrorStreak);
+        await sleep(3000);
+        continue;
+      }
       await log('ERROR', 'BOT', prefixRuntime(runtime, error.message));
       toast(`${getRuntimeLabel(runtime)} lỗi: ${error.message}`, 5000);
       await sleep(3000);
     }
   }
   if (runtime.tabId === activeWvTab) refreshActiveTabRuntimeUi();
+  updateAutomationActivity();
   toast(`${getRuntimeLabel(runtime)} đã dừng`);
+}
+
+async function enqueueTechnicalReview({ conversationId, tabId, code, stage }) {
+  const safeCode = /^[A-Z0-9_]{1,64}$/.test(String(code || '')) ? String(code) : 'ACTION_UNCERTAIN';
+  const safeStage = /^(clickConversationById|setReplyText|clickSendButton|applyTagByName|markCurrentConversationUnread)$/.test(String(stage || ''))
+    ? String(stage)
+    : 'action';
+  const safeTabId = tabId === 'bot1' || tabId === 'bot2' ? tabId : '';
+  await postQueueWithRetry({
+    conversationId: String(conversationId || '').slice(0, 200),
+    customerName: '',
+    customerMessage: '',
+    intent: 'AUTOMATION_REVIEW',
+    reason: `Automation ${safeCode} at ${safeStage}`,
+    pancakeUrl: '',
+    technical: {
+      tabId: safeTabId,
+      code: safeCode,
+      stage: safeStage
+    }
+  });
+}
+
+function createClickCoordinator(cacheMode) {
+  return window.PDBConversationProcessing.createConversationProcessingCoordinator({
+    claims: window.PDBConversationClaims,
+    isProcessed: (key) => wasConversationProcessedAnywhere(key),
+    commitProcessed: (key) => rememberConversationProcessedEverywhere(key),
+    isConversationBlocked: (key) => uncertainConversationBlocks.has(key),
+    blockConversation: (key) => uncertainConversationBlocks.add(key),
+    addReviewItem: (item) => enqueueTechnicalReview({ ...item, cacheMode })
+  });
 }
 
 // --- Panel: cửa sổ nổi kéo-thả ---
@@ -1178,6 +1799,7 @@ let panelPos = null; // { left, top } px — vị trí gần nhất
 function openPanel() {
   const p = document.querySelector('.control-panel');
   p.classList.add('open');
+  if ($('panelBackdrop')) $('panelBackdrop').hidden = false;
   if (panelPos) {
     // Kẹp lại trong viewport phòng khi cửa sổ app đã thu nhỏ từ lần kéo trước.
     const w = p.offsetWidth || 0;
@@ -1192,7 +1814,9 @@ function openPanel() {
 
 function closePanel() {
   document.querySelector('.control-panel').classList.remove('open');
+  if ($('panelBackdrop')) $('panelBackdrop').hidden = true;
   if ($('miniRail')) $('miniRail').classList.remove('hidden');
+  if ($('settingsBtn')) $('settingsBtn').focus();
 }
 
 // Kéo cửa sổ nổi bằng thanh tiêu đề; kẹp trong viewport; lưu vị trí.
@@ -1253,7 +1877,7 @@ function setBotUiState(running = Boolean(getActiveBotRuntime()?.botRunning)) {
 function refreshBrowserTabBadges() {
   document.querySelectorAll('.browser-tab').forEach((btn) => {
     const runtime = getTab(btn.dataset.wvtab).runtime;
-    btn.classList.toggle('running', Boolean(runtime?.botRunning || runtime?.autoClickRunning));
+    btn.classList.toggle('running', Boolean(runtime?.botRunning || runtime?.autoClickRunning || runtime?.autoReplyPreviewRunning));
   });
 }
 
@@ -1263,47 +1887,87 @@ function refreshActiveTabRuntimeUi() {
   syncLegacyRuntimeAliases(runtime || webviewTabs.bot1.runtime);
   const botOn = Boolean(runtime?.botRunning);
   const autoOn = Boolean(runtime?.autoClickRunning);
+  const previewOn = Boolean(runtime?.autoReplyPreviewRunning || runtime?.autoReplyPreviewStopping);
   setBotUiState(botOn);
   setAutoClickUiState(autoOn);
+  setAutoReplyPreviewUiState(previewOn);
   if ($('activeTabBotStatus')) {
     $('activeTabBotStatus').textContent = tab.botCapable
-      ? `${tab.label}: ${botOn ? 'Bot running' : autoOn ? 'AutoClick running' : 'Stopped'}`
+      ? `${tab.label}: ${botOn ? 'Bot running' : autoOn ? 'AutoClick running' : previewOn ? 'Preview Reply running' : 'Stopped'}`
       : `${tab.label}: thủ công`;
   }
-  if ($('startBotBtn')) $('startBotBtn').disabled = !tab.botCapable || autoOn;
-  if ($('stopBotBtn')) $('stopBotBtn').disabled = !tab.botCapable;
-  if ($('startAutoClickBtn')) $('startAutoClickBtn').disabled = !tab.botCapable || botOn;
+  const floatingStatus = tab.botCapable ? (botOn ? 'Running' : autoOn ? 'Auto Click' : previewOn ? 'Preview Reply' : 'Ready') : 'Manual';
+  if ($('floatingBotLabel')) $('floatingBotLabel').textContent = tab.label;
+  if ($('floatingBotStatus')) $('floatingBotStatus').textContent = floatingStatus;
+  if ($('bottomBotStatus')) $('bottomBotStatus').textContent = floatingStatus;
+  if ($('startBotBtn')) $('startBotBtn').disabled = !tab.botCapable || botOn || autoOn || previewOn;
+  if ($('stopBotBtn')) $('stopBotBtn').disabled = !tab.botCapable || !botOn;
+  if ($('startAutoClickBtn')) $('startAutoClickBtn').disabled = !tab.botCapable || botOn || previewOn;
+  if ($('startAutoReplyPreviewBtn')) $('startAutoReplyPreviewBtn').disabled = !tab.botCapable || botOn || autoOn || previewOn;
+  if ($('stopAutoReplyPreviewBtn')) $('stopAutoReplyPreviewBtn').disabled = !tab.botCapable || !previewOn;
+  if ($('autoReplyPreviewStatus')) $('autoReplyPreviewStatus').textContent = runtime?.autoReplyPreviewState || 'idle';
   if ($('stopAutoClickBtn')) $('stopAutoClickBtn').disabled = !tab.botCapable;
   setRuntimeState(tab.botCapable
-    ? `${tab.label}: ${botOn ? 'Bot running' : autoOn ? 'AutoClick running' : 'Stopped'}`
+    ? `${tab.label}: ${botOn ? 'Bot running' : autoOn ? 'AutoClick running' : previewOn ? 'Preview Reply running' : 'Stopped'}`
     : `${tab.label}: Manual`);
   refreshBrowserTabBadges();
 }
 
 async function startBot(runtime = getActiveBotRuntime()) {
   if (!runtime) { toast('Tab này không hỗ trợ bot', 4000); refreshActiveTabRuntimeUi(); return; }
+  if (runtime.botRunning) {
+    if ($('botEnabled')) $('botEnabled').checked = true;
+    syncLegacyRuntimeAliases(runtime);
+    updateAutomationActivity();
+    refreshActiveTabRuntimeUi();
+    return;
+  }
   if (runtime.autoClickRunning) {                             // Req 2.3, 2.4, 9.1
     toast('Auto Click đang chạy trong tab này — hãy dừng Auto Click trước.', 5000);
     refreshActiveTabRuntimeUi();
     return;
   }
+  if (anyRuntimeAutoReplyPreviewRunning()) {
+    toast('Auto Reply Preview đang chạy — hãy dừng trước.', 5000);
+    refreshActiveTabRuntimeUi();
+    return;
+  }
+  await ensureBotChatPage(runtime);
+  runtime.botRunning = true;
   if ($('botEnabled')) $('botEnabled').checked = true;
-  await saveSettingsFromUi();
+  try {
+    await saveSettingsFromUi();
+  } catch (error) {
+    runtime.botRunning = false;
+    syncLegacyRuntimeAliases(runtime);
+    updateAutomationActivity();
+    refreshActiveTabRuntimeUi();
+    throw error;
+  }
   if (!runtime.botLoopPromise) {
     runtime.botLoopPromise = botLoop(runtime).finally(() => { runtime.botLoopPromise = null; syncLegacyRuntimeAliases(runtime); refreshActiveTabRuntimeUi(); });
   }
-  runtime.botRunning = true;
+  await log('INFO', 'BOT', prefixRuntime(runtime, 'Started'));
   syncLegacyRuntimeAliases(runtime);
+  updateAutomationActivity();
   refreshActiveTabRuntimeUi();
 }
 
 async function stopBot(runtime = getActiveBotRuntime()) {
   if (!runtime) { toast('Tab này không hỗ trợ bot', 4000); return; }
+  const wasRunning = Boolean(runtime.botRunning);
   runtime.botRunning = false;
   if ($('botEnabled')) $('botEnabled').checked = anyRuntimeBotRunning();
+  if (!wasRunning) {
+    syncLegacyRuntimeAliases(runtime);
+    updateAutomationActivity();
+    refreshActiveTabRuntimeUi();
+    return;
+  }
   await saveSettingsFromUi();
   await log('WARN', 'BOT', prefixRuntime(runtime, 'Emergency Stop'));
   syncLegacyRuntimeAliases(runtime);
+  updateAutomationActivity();
   refreshActiveTabRuntimeUi();
 }
 
@@ -1347,15 +2011,33 @@ async function autoClickLoop(runtime) {
   while (runtime.autoClickRunning) {
     try {
       settings = await api('/api/settings');
-      await processOneAutoClick(runtime);
+      const result = await processOneAutoClick(runtime);
+      if (result?.uncertain || result?.code === 'UNCERTAIN') {
+        runtime.autoClickRunning = false;
+        await logUncertainStop(runtime, 'AUTOCLICK', result?.stage || result?.uncertainMethod);
+        break;
+      }
+      runtime.autoClickTransientErrorStreak = 0;
       await sleep(settings.autoClickDelayMs || 3000);   // Req 6.1, 6.3
     } catch (error) {
+      if (error?.uncertain || error?.dispatched) {
+        runtime.autoClickRunning = false;
+        await logUncertainStop(runtime, 'AUTOCLICK', error?.uncertainMethod || error?.processingStage);
+        break;
+      }
+      if (isTransientAutomationError(error)) {
+        runtime.autoClickTransientErrorStreak = (runtime.autoClickTransientErrorStreak || 0) + 1;
+        await logTransientAutomationError(runtime, 'AUTOCLICK', error, runtime.autoClickTransientErrorStreak);
+        await sleep(3000);
+        continue;
+      }
       await log('ERROR', 'AUTOCLICK', prefixRuntime(runtime, error.message));   // Req 8.2
       toast(`${getRuntimeLabel(runtime)} Auto Click lỗi: ${error.message}`, 5000);
       await sleep(3000);
     }
   }
   if (runtime.tabId === activeWvTab) refreshActiveTabRuntimeUi();
+  updateAutomationActivity();
   toast(`${getRuntimeLabel(runtime)} Auto Click đã dừng`);
 }
 
@@ -1367,6 +2049,11 @@ async function startAutoClick(runtime = getActiveBotRuntime()) {
     refreshActiveTabRuntimeUi();
     return;
   }
+  if (anyRuntimeAutoReplyPreviewRunning()) {
+    toast('Auto Reply Preview đang chạy — hãy dừng trước.', 5000);
+    refreshActiveTabRuntimeUi();
+    return;
+  }
   if ($('autoClickEnabled')) $('autoClickEnabled').checked = true;
   await saveSettingsFromUi();
   if (!runtime.autoClickLoopPromise) {
@@ -1374,6 +2061,7 @@ async function startAutoClick(runtime = getActiveBotRuntime()) {
   }
   runtime.autoClickRunning = true;
   syncLegacyRuntimeAliases(runtime);
+  updateAutomationActivity();
   refreshActiveTabRuntimeUi();
 }
 
@@ -1385,6 +2073,133 @@ async function stopAutoClick(runtime = getActiveBotRuntime()) {
   await saveSettingsFromUi();
   await log('WARN', 'AUTOCLICK', prefixRuntime(runtime, 'Đã dừng Auto Click'));
   syncLegacyRuntimeAliases(runtime);
+  updateAutomationActivity();
+  refreshActiveTabRuntimeUi();
+}
+
+function setAutoReplyPreviewUiState(running = Boolean(getActiveBotRuntime()?.autoReplyPreviewRunning)) {
+  const activeTab = getTab(activeWvTab);
+  const btn = $('miniAutoReplyPreviewBtn');
+  if (!btn) return;
+  btn.classList.toggle('on', running);
+  btn.disabled = !activeTab.botCapable;
+  btn.innerHTML = `<span class="mini-dot"></span><span>${window.PDBIcons ? window.PDBIcons.svg(running ? 'pause' : 'message') : (running ? '⏸' : '▢')}</span><span class="mini-label">Comment</span>`;
+}
+
+function readAutoReplyPreviewSettings() {
+  const fallback = window.PDBAutoReplyPreview.DEFAULTS;
+  try { return window.PDBAutoReplyPreview.normalizeSettings(JSON.parse(localStorage.getItem(AUTO_REPLY_PREVIEW_STORAGE_KEY) || '{}')); }
+  catch (_) { return { ...fallback }; }
+}
+
+function autoReplyPreviewSettingsFromUi() {
+  return window.PDBAutoReplyPreview.normalizeSettings({
+    replyText: $('autoReplyPreviewShortcut').value,
+    waitAfterConversationClickMs: $('autoReplyPreviewWaitAfterClick').value,
+    waitBeforePreviewSendMs: $('autoReplyPreviewWaitBeforePreview').value,
+    waitBeforeOuterReplyMs: $('autoReplyPreviewWaitBeforeOuter').value,
+    loopDelayMs: $('autoReplyPreviewLoopDelay').value,
+    selectorTimeoutMs: $('autoReplyPreviewSelectorTimeout').value
+  });
+}
+
+function renderAutoReplyPreviewSettings(value = readAutoReplyPreviewSettings()) {
+  if (!$('autoReplyPreviewShortcut')) return;
+  $('autoReplyPreviewShortcut').value = value.replyText;
+  $('autoReplyPreviewWaitAfterClick').value = value.waitAfterConversationClickMs;
+  $('autoReplyPreviewWaitBeforePreview').value = value.waitBeforePreviewSendMs;
+  $('autoReplyPreviewWaitBeforeOuter').value = value.waitBeforeOuterReplyMs;
+  $('autoReplyPreviewLoopDelay').value = value.loopDelayMs;
+  $('autoReplyPreviewSelectorTimeout').value = value.selectorTimeoutMs;
+}
+
+function saveAutoReplyPreviewSettings() {
+  const value = autoReplyPreviewSettingsFromUi();
+  localStorage.setItem(AUTO_REPLY_PREVIEW_STORAGE_KEY, JSON.stringify(value));
+  renderAutoReplyPreviewSettings(value);
+  toast('Đã lưu thông số Preview Reply');
+}
+
+async function autoReplyPreviewLoop(runtime, settingsValue) {
+  runtime.autoReplyPreviewRunning = true;
+  runtime.autoReplyPreviewState = 'running';
+  refreshActiveTabRuntimeUi();
+  try {
+    await previewCall(runtime.tabId, `window.PDBAutoReplyPreviewController.start(${JSON.stringify(settingsValue)})`, 'autoReplyPreviewStart');
+    while (runtime.autoReplyPreviewRunning) {
+      if (getTab(runtime.tabId).loadGeneration !== runtime.autoReplyPreviewGeneration) {
+        const error = new Error('Trang Pancake đã tải lại; Preview Reply đã dừng');
+        error.code = 'PREVIEW_SEND_UNVERIFIED';
+        throw error;
+      }
+      const status = await previewCall(runtime.tabId, 'window.PDBAutoReplyPreviewController.getStatus()', 'autoReplyPreviewStatus');
+      runtime.autoReplyPreviewState = status?.state || status?.phase || 'running';
+      if ($('autoReplyPreviewProgress')) $('autoReplyPreviewProgress').textContent = `Phase: ${status?.phase || 'running'} | Đã xử lý: ${status?.processedCount || 0} | Thử: ${status?.attemptedCount || 0}`;
+      if (status?.lastErrorCode && $('autoReplyPreviewError')) { $('autoReplyPreviewError').hidden = false; $('autoReplyPreviewError').textContent = `${status.lastErrorCode}: ${status.lastError}`; }
+      if (status?.state === 'failed' || status?.state === 'stopped') break;
+      await sleep(500);
+    }
+  } catch (error) {
+    runtime.autoReplyPreviewState = 'failed';
+    if ($('autoReplyPreviewError')) { $('autoReplyPreviewError').hidden = false; $('autoReplyPreviewError').textContent = String(error.message || error); }
+    toast(`Preview Reply lỗi: ${error.message}`, 5000);
+  } finally {
+    runtime.autoReplyPreviewRunning = false;
+    runtime.autoReplyPreviewLoopPromise = null;
+    updateAutomationActivity();
+    refreshActiveTabRuntimeUi();
+  }
+}
+
+async function startAutoReplyPreview(runtime = getActiveBotRuntime()) {
+  if (!runtime) { toast('Tab này không hỗ trợ Preview Reply', 4000); return; }
+  if (autoReplyPreviewStartLock || anyRuntimeBotRunning() || anyRuntimeAutoClickRunning() || anyRuntimeAutoReplyPreviewRunning()) {
+    toast('Đang có automation khác chạy — hãy dừng trước.', 5000);
+    return;
+  }
+  autoReplyPreviewStartLock = true;
+  runtime.autoReplyPreviewRunning = true;
+  runtime.autoReplyPreviewGeneration = getTab(runtime.tabId).loadGeneration;
+  runtime.autoReplyPreviewState = 'starting';
+  updateAutomationActivity();
+  refreshActiveTabRuntimeUi();
+  runtime.autoReplyPreviewLoopPromise = (async () => {
+    try {
+      await ensureBotChatPage(runtime);
+      if (!runtime.autoReplyPreviewRunning || runtime.autoReplyPreviewStopping) return;
+      const settingsValue = autoReplyPreviewSettingsFromUi();
+      if ($('autoReplyPreviewError')) $('autoReplyPreviewError').hidden = true;
+      await autoReplyPreviewLoop(runtime, settingsValue);
+    } catch (error) {
+      runtime.autoReplyPreviewState = 'failed';
+      if ($('autoReplyPreviewError')) { $('autoReplyPreviewError').hidden = false; $('autoReplyPreviewError').textContent = String(error.message || error); }
+      toast(`Preview Reply lỗi: ${error.message}`, 5000);
+    }
+  })().finally(() => {
+    runtime.autoReplyPreviewLoopPromise = null;
+    runtime.autoReplyPreviewRunning = false;
+    runtime.autoReplyPreviewStopping = false;
+    autoReplyPreviewStartLock = false;
+    updateAutomationActivity();
+    refreshActiveTabRuntimeUi();
+  });
+}
+
+async function stopAutoReplyPreview(runtime = getActiveBotRuntime()) {
+  if (!runtime) return;
+  const loopPromise = runtime.autoReplyPreviewLoopPromise;
+  if (runtime.autoReplyPreviewRunning) {
+    runtime.autoReplyPreviewState = 'stopping';
+    runtime.autoReplyPreviewStopping = true;
+    runtime.autoReplyPreviewRunning = false;
+    refreshActiveTabRuntimeUi();
+    void previewCall(runtime.tabId, 'window.PDBAutoReplyPreviewController.stop()', 'autoReplyPreviewStop').catch(() => {});
+  }
+  if (loopPromise) await loopPromise.catch(() => {});
+  runtime.autoReplyPreviewRunning = false;
+  runtime.autoReplyPreviewStopping = false;
+  autoReplyPreviewStartLock = false;
+  updateAutomationActivity();
   refreshActiveTabRuntimeUi();
 }
 
@@ -1393,6 +2208,13 @@ async function toggleAutoClickFromRail() {
   if (!runtime) { toast('Tab này không hỗ trợ Auto Click', 4000); return; }
   if (runtime.autoClickRunning) await stopAutoClick(runtime);
   else await startAutoClick(runtime);
+}
+
+async function toggleAutoReplyPreviewFromRail() {
+  const runtime = getActiveBotRuntime();
+  if (!runtime) { toast('Tab này không hỗ trợ Preview Reply', 4000); return; }
+  if (runtime.autoReplyPreviewRunning || runtime.autoReplyPreviewStopping) await stopAutoReplyPreview(runtime);
+  else await startAutoReplyPreview(runtime);
 }
 
 function openPanelTab(tabId) {
@@ -1423,11 +2245,12 @@ function switchWebviewTab(tabName) {
     item.webview.classList.toggle('wv-active', item.id === tab.id);
     item.webview.classList.toggle('wv-hidden', item.id !== tab.id);
   });
-  if (!tab.loaded && !tab.webview.src) {
-    tab.webview.src = pancakeUrl;
-    tab.loaded = true;
+  const currentUrl = safeGetURL(tab.webview, tab.webview.src || '');
+  if (window.PDBWebviewTabNavigation?.shouldLazyLoadWebview(tab, currentUrl)) {
+    navigateWebview(tab, pancakeUrl);
+    if ($('webviewStatus')) $('webviewStatus').textContent = 'Đang tải...';
   }
-  $('urlInput').value = safeGetURL(tab.webview, tab.webview.src || pancakeUrl);
+  $('urlInput').value = safeGetURL(tab.webview, tab.expectedNavigationUrl || tab.webview.src || pancakeUrl);
   setActiveRuntimeMessages(tab.runtime);
   stopAssistantWatch();
   if (assistantEnabled && pageVisible && tab.botCapable) startAssistantWatch();
@@ -1522,8 +2345,7 @@ function getReviewTargetTabId() {
 async function navigateToConversation(item, tabId = getReviewTargetTabId()) {
   const tab = getTab(tabId);
   if (/^https?:\/\//.test(item.pancakeUrl || '')) {   // Req 3.3
-    tab.webview.src = item.pancakeUrl;
-    tab.loaded = true;
+    navigateWebview(tab, item.pancakeUrl);
     return true;
   }
   if (item.conversationId) {                            // Req 3.4
@@ -1624,20 +2446,61 @@ function enableDragScroll(el) {
 }
 
 function bindUi() {
+  const webviewStatus = $('webviewStatus');
+  const bottomWebviewStatus = $('bottomWebviewStatus');
+  const connectionStatus = $('webviewConnectionStatus');
+  const loadingState = $('webviewLoading');
+  const errorState = $('webviewError');
+  const syncShellWebviewState = () => {
+    const text = webviewStatus?.textContent || '';
+    const loading = /Ä‘ang táº£i|connecting|loading|khÃ´i phá»¥c/i.test(text);
+    const failed = /lá»—i|failed|error|khÃ´ng thá»ƒ|chÆ°a thá»ƒ/i.test(text);
+    const connected = !loading && !failed && /loaded|ready|Ä‘Ã£ Ä‘Äƒng nháº­p|connected/i.test(text);
+    if (bottomWebviewStatus) bottomWebviewStatus.textContent = text || (loading ? 'Loading' : 'WebView');
+    if (connectionStatus) {
+      connectionStatus.textContent = loading ? 'Loading' : failed ? 'Error' : connected ? 'Connected' : 'Connecting';
+      connectionStatus.className = `surface-status ${loading ? 'loading' : failed ? 'error' : connected ? 'connected' : 'connecting'}`;
+    }
+    if (loadingState) loadingState.hidden = !loading;
+    if (errorState) errorState.hidden = !failed;
+  };
+  if (webviewStatus && bottomWebviewStatus) {
+    new MutationObserver(syncShellWebviewState).observe(webviewStatus, { childList: true, characterData: true, subtree: true });
+    syncShellWebviewState();
+  }
   // Panel toggle + mini rail
   $('panelCloseBtn').addEventListener('click', closePanel);
   if ($('panelMinBtn')) $('panelMinBtn').addEventListener('click', closePanel);
   enablePanelDrag();
   if ($('miniPanelBtn')) $('miniPanelBtn').addEventListener('click', openPanel);
+  if ($('panelBackdrop')) $('panelBackdrop').addEventListener('click', closePanel);
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && document.querySelector('.control-panel.open')) closePanel();
+  });
   if ($('miniBotBtn')) $('miniBotBtn').addEventListener('click', async () => {
     try { await toggleBotFromRail(); } catch (e) { toast(e.message, 5000); }
   });
   if ($('miniAutoClickBtn')) $('miniAutoClickBtn').addEventListener('click', async () => {
     try { await toggleAutoClickFromRail(); } catch (e) { toast(e.message, 5000); }
   });
+  if ($('miniAutoReplyPreviewBtn')) $('miniAutoReplyPreviewBtn').addEventListener('click', async () => {
+    try { await toggleAutoReplyPreviewFromRail(); } catch (e) { toast(e.message, 5000); }
+  });
   if ($('miniQueueBtn')) $('miniQueueBtn').addEventListener('click', () => openPanelTab('reviewQueuePanel'));
   if ($('miniSuggestBtn')) $('miniSuggestBtn').addEventListener('click', () => openPanelTab('ai'));
   if ($('themeBtn')) $('themeBtn').addEventListener('click', toggleTheme);
+  document.querySelectorAll('[data-open-devtools]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      try {
+        const target = button.dataset.openDevtools;
+        const webview = target === 'main' ? null : getTab(target)?.webview;
+        const webContentsId = webview?.getWebContentsId?.();
+        await window.pancakeDesktop.openDevTools(webContentsId);
+      } catch (error) {
+        toast(`Không mở được Developer Tools: ${error.message}`, 5000);
+      }
+    });
+  });
 
   // Browser webview tabs
   document.querySelectorAll('.browser-tab').forEach((btn) => {
@@ -1646,9 +2509,26 @@ function bindUi() {
 
   // Toolbar: Go / Reload target the active tab
   $('goBtn').addEventListener('click', () => {
-    activeWebview().src = $('urlInput').value.trim() || pancakeUrl;
+    navigateWebview(getTab(activeWvTab), $('urlInput').value.trim() || pancakeUrl);
   });
-  $('reloadBtn').addEventListener('click', () => activeWebview().reload());
+  $('reloadBtn').addEventListener('click', async () => {
+    try { await reloadActiveWebview(); } catch (e) { toast(e.message, 5000); }
+  });
+  if ($('pancakeLoginBtn')) $('pancakeLoginBtn').addEventListener('click', () => {
+    openLoginInTab(getTab(activeWvTab), { force: true });
+  });
+  if ($('settingsBtn')) $('settingsBtn').addEventListener('click', () => openPanelTab('bot'));
+  if ($('retryWebviewBtn')) $('retryWebviewBtn').addEventListener('click', async () => {
+    try { await reloadActiveWebview(); } catch (e) { toast(e.message, 5000); }
+  });
+  document.querySelectorAll('.shortcut-dock-btn').forEach((button) => {
+    button.addEventListener('click', async () => {
+      try { await fillShortcut(button.dataset.shortcut); }
+      catch (e) { toast(e.message, 5000); }
+    });
+  });
+  if ($('authLoginBtn')) $('authLoginBtn').addEventListener('click', signInOperator);
+  if ($('authLogoutBtn')) $('authLogoutBtn').addEventListener('click', signOutOperator);
   $('saveSettingsBtn').addEventListener('click', saveSettingsFromUi);
   $('saveAiConfigBtn').addEventListener('click', async () => {
     try { await saveAiConfigFromUi(); } catch (e) { toast(e.message, 5000); }
@@ -1667,6 +2547,15 @@ function bindUi() {
   });
   if ($('stopAutoClickBtn')) $('stopAutoClickBtn').addEventListener('click', async () => {
     try { await stopAutoClick(); } catch (e) { toast(e.message, 5000); }
+  });
+  if ($('saveAutoReplyPreviewBtn')) $('saveAutoReplyPreviewBtn').addEventListener('click', () => {
+    try { saveAutoReplyPreviewSettings(); } catch (e) { toast(e.message, 5000); }
+  });
+  if ($('startAutoReplyPreviewBtn')) $('startAutoReplyPreviewBtn').addEventListener('click', async () => {
+    try { await startAutoReplyPreview(); } catch (e) { toast(e.message, 5000); }
+  });
+  if ($('stopAutoReplyPreviewBtn')) $('stopAutoReplyPreviewBtn').addEventListener('click', async () => {
+    try { await stopAutoReplyPreview(); } catch (e) { toast(e.message, 5000); }
   });
   if ($('autoClickEnabled')) $('autoClickEnabled').addEventListener('change', async (e) => {
     try { if (e.target.checked) await startAutoClick(); else await stopAutoClick(); }
@@ -1732,38 +2621,119 @@ function bindUi() {
 
   Object.values(webviewTabs).forEach((tab) => {
     if (!tab.webview) return;
-    tab.webview.addEventListener('did-finish-load', async () => {
+    const finishTabLoad = async (event = {}) => {
+      const loadedUrl = safeGetURL(tab.webview, tab.webview.src || '');
+      const shouldAcceptLoad = window.PDBWebviewAutomation?._shouldAcceptWebviewLoad;
+      if (shouldAcceptLoad && !shouldAcceptLoad(tab, { loadedUrl, event })) return;
+      if (tab.readyHandledGeneration === tab.loadGeneration) return;
+      tab.readyHandledGeneration = tab.loadGeneration;
+      const completedReload = tab.reloadGeneration === tab.loadGeneration;
       tab.loaded = true;
+      tab.completedGeneration = tab.loadGeneration;
+      tab.loadState = 'loaded';
+      tab.loadError = null;
+      tab.authState = 'transition';
+      if (completedReload) tab.reloadGeneration = null;
       tab.automationInjected = false; // page reloaded -> __PDB__ is gone, re-inject lazily
+      tab.injectionGeneration = -1;
       if (activeWvTab === tab.id) {
         $('urlInput').value = safeGetURL(tab.webview, tab.webview.src || pancakeUrl);
         $('webviewStatus').textContent = `${tab.label} loaded`;
       }
+      const resolveChatEntry = window.PDBPancakeUrlPolicy.resolveChatEntryUrl;
+      const loadedChatEntry = typeof resolveChatEntry === 'function'
+        ? resolveChatEntry(loadedUrl)
+        : '';
+      if (tab.authLoginPending && loadedChatEntry && tab.authReturnUrl && loadedChatEntry !== tab.authReturnUrl) {
+        if (activeWvTab === tab.id) $('webviewStatus').textContent = 'Đã đăng nhập, đang mở lại trang chốt đơn...';
+        navigateWebview(tab, tab.authReturnUrl);
+        await waitForTabReady(tab, 'auth return');
+        return;
+      }
+      if (tab.authLoginPending && loadedChatEntry && (!tab.authReturnUrl || loadedChatEntry === tab.authReturnUrl)) {
+        tab.authState = 'ready';
+        tab.authLoginPending = false;
+        tab.authReturnUrl = '';
+        if (activeWvTab === tab.id && $('pancakeLoginBtn')) $('pancakeLoginBtn').hidden = true;
+      }
       if (tab.botCapable) {
         try {
           await injectAutomation(tab.id);
+          tab.authState = 'ready';
+          tab.authLoginPending = false;
+          tab.authReturnUrl = '';
+          if ($('pancakeLoginBtn')) $('pancakeLoginBtn').hidden = true;
           if (activeWvTab === tab.id) await updateDomSummary(tab.id);
         } catch (error) {
-          if (activeWvTab === tab.id) $('webviewStatus').textContent = 'Inject lỗi: ' + error.message;
+          if (window.PDBPancakeAutomationGate.isAuthRequiredError(error)) {
+            showAuthRequiredState(tab, error);
+          } else if (activeWvTab === tab.id && error?.code === 'WRONG_PANCAKE_PAGE') {
+            $('domSummary').textContent = error.message;
+            $('unreadCount').textContent = '0';
+            $('webviewStatus').textContent = error.message;
+          } else if (activeWvTab === tab.id) {
+            $('webviewStatus').textContent = 'Inject lỗi: ' + error.message;
+          }
         }
       }
+    };
+    tab.webview.addEventListener('did-finish-load', finishTabLoad);
+    tab.webview.addEventListener('pdb-navigation-ready', finishTabLoad);
+    tab.webview.addEventListener('dom-ready', (event) => {
+      if (!tab.webview.isLoading?.()) finishTabLoad(event);
     });
-    tab.webview.addEventListener('did-start-loading', () => {
+    tab.webview.addEventListener('did-stop-loading', finishTabLoad);
+    const markAuthTransition = (event = {}) => {
+      tab.authState = 'transition';
       tab.automationInjected = false;
-      tab.loaded = false;
+      tab.injectionGeneration = -1;
+      tab.lastNavigationUrl = event.url || safeGetURL(tab.webview, tab.webview.src || '');
+    };
+    tab.webview.addEventListener('did-navigate', markAuthTransition);
+    tab.webview.addEventListener('did-navigate-in-page', markAuthTransition);
+    tab.webview.addEventListener('did-start-loading', () => {
+      window.PDBWebviewAutomation.startGuestNavigationLoad(tab);
+      tab.readyHandledGeneration = -1;
+      tab.authState = 'transition';
       if (activeWvTab === tab.id) $('webviewStatus').textContent = 'Đang tải...';
     });
     tab.webview.addEventListener('did-fail-load', (event) => {
+      const shouldAcceptLoad = window.PDBWebviewAutomation?._shouldAcceptWebviewLoad;
+      if (shouldAcceptLoad && !shouldAcceptLoad(tab, {
+        loadedUrl: event.validatedURL || '',
+        event,
+        failure: true
+      })) return;
+      const failedReload = tab.reloadGeneration === tab.loadGeneration;
       tab.automationInjected = false;
+      tab.injectionGeneration = -1;
       tab.loaded = false;
+      tab.loadState = 'failed';
+      if (failedReload) tab.reloadGeneration = null;
       const detail = `${tab.label} load lỗi: ${event.errorCode || ''} ${event.errorDescription || ''}`.trim();
+      tab.loadError = detail;
       if (activeWvTab === tab.id) $('webviewStatus').textContent = detail;
     });
     tab.webview.addEventListener('render-process-gone', (event) => {
       tab.automationInjected = false;
+      tab.injectionGeneration = -1;
       tab.loaded = false;
+      tab.loadState = 'gone';
+      tab.reloadGeneration = null;
       const detail = `${tab.label} renderer dừng: ${event.reason || 'unknown'}`;
+      tab.loadError = detail;
       if (activeWvTab === tab.id) $('webviewStatus').textContent = detail;
+    });
+    // "Script failed to execute" only tells us the guest threw; the stack stays
+    // in the guest's own console. Keep the newest guest-side error so transient
+    // automation failures can report where it actually threw.
+    tab.webview.addEventListener('console-message', (event) => {
+      if (Number(event.level) < 2) return;   // errors/warnings only
+      tab.lastGuestConsoleError = {
+        text: String(event.message || '').slice(0, 300),
+        source: `${String(event.sourceId || '').split('/').pop()}:${event.line || 0}`,
+        at: Date.now()
+      };
     });
   });
 }
@@ -1797,6 +2767,12 @@ async function runDomTest(name) {
     if (name === 'markUnread') result = await botCall('markCurrentConversationUnread');
     if (name === 'recentMsgs') result = await botCall('getRecentMessages', 5);
     if (name === 'orderStatus') result = await botCall('getCustomerOrderStatus');
+    if (name === 'openOrders') {
+      result = await botCall('openCustomerOrders');
+      if (result?.ok && result.mode === 'url' && result.url) {
+        result.window = await window.pancakeDesktop.openOrderWindow(result.url);
+      }
+    }
     $('domTestResult').textContent = safeJson(result);
     await updateDomSummary();
   } catch (error) {
@@ -1823,6 +2799,10 @@ function applyVisibility(state) {
     startPolling();
     if (assistantEnabled) startAssistantWatch();        // Req 5.9
   } else {
+    if (anyRuntimeAutomationActive()) {
+      startPolling();
+      return;
+    }
     // Pause background work and hint the engine to reclaim memory.
     stopPolling();
     stopAssistantWatch();                               // Req 5.9
@@ -1832,16 +2812,67 @@ function applyVisibility(state) {
   }
 }
 
+// --- electron-updater toast notification ---
+function initUpdaterToast() {
+  if (!window.pancakeDesktop?.onUpdateState) return;
+  const toast = document.getElementById('updateToast');
+  const msg = document.getElementById('updateToastMsg');
+  const progressWrap = document.getElementById('updateProgressWrap');
+  const progressBar = document.getElementById('updateProgressBar');
+  const installBtn = document.getElementById('updateInstallBtn');
+  const dismissBtn = document.getElementById('updateDismissBtn');
+  if (!toast || !msg) return;
+
+  function show(message, showInstall = false, showProgress = false) {
+    msg.textContent = message;
+    toast.classList.remove('hidden');
+    progressWrap.classList.toggle('hidden', !showProgress);
+    installBtn.classList.toggle('hidden', !showInstall);
+  }
+
+  dismissBtn?.addEventListener('click', () => toast.classList.add('hidden'));
+
+  installBtn?.addEventListener('click', () => {
+    window.pancakeDesktop.quitAndInstall?.();
+  });
+
+  window.pancakeDesktop.onUpdateAvailable?.((info) => {
+    show(`Bản cập nhật ${info?.version || 'mới'} đang tải xuống...`, false, true);
+  });
+
+  window.pancakeDesktop.onUpdateProgress?.((progress) => {
+    const pct = Math.round(progress?.percent ?? 0);
+    progressBar.style.width = `${pct}%`;
+    msg.textContent = `Đang tải bản cập nhật: ${pct}%`;
+  });
+
+  window.pancakeDesktop.onUpdateDownloaded?.((info) => {
+    progressBar.style.width = '100%';
+    show(`Bản ${info?.version || 'mới'} đã sẵn sàng cài đặt.`, true, false);
+  });
+
+  window.pancakeDesktop.onUpdateError?.((err) => {
+    if (err?.message && /trust configuration|not-configured/i.test(err.message)) return;
+    msg.textContent = `Lỗi cập nhật: ${err?.message || 'Không xác định'}`;
+    toast.classList.remove('hidden');
+    installBtn.classList.add('hidden');
+    progressWrap.classList.add('hidden');
+  });
+}
+
 async function init() {
+  initUpdaterToast();
   initTheme();
   bindTabs();
   bindUi();
   const env = await window.pancakeDesktop.getEnv();
   serverUrl = env.serverUrl || serverUrl;
-  pancakeUrl = env.pancakeUrl || pancakeUrl;
+  localApiToken = String(env.apiToken || '');
+  pancakeUrl = normalizePancakeBotUrl(env.pancakeUrl || pancakeUrl);
+  await loadControlPlaneStatus();
+  if (window.pancakeDesktop.onAuthStatus) window.pancakeDesktop.onAuthStatus(renderControlPlaneStatus);
   $('urlInput').value = pancakeUrl;
-  webviewTabs.bot1.webview.src = pancakeUrl;
-  webviewTabs.bot1.loaded = true;
+  Object.values(webviewTabs).forEach((tab) => navigateWebview(tab, pancakeUrl));
   await loadHealth();
   await loadSettings();
   await loadAiConfig();
@@ -1851,6 +2882,7 @@ async function init() {
   await loadExtensions();
   computeBotStats();   // thống kê bot lần đầu (tab Tổng quan)
   startPolling();
+  notifyMainAutomationState();
 
   // Pause polling when the window/tab is not visible to cut idle RAM/CPU.
   if (window.pancakeDesktop.onVisibilityChange) {

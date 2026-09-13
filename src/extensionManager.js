@@ -5,7 +5,7 @@ const { session } = require('electron');
 // Root folder that acts like Chrome's extension store: each sub-folder is one
 // unpacked extension (must contain manifest.json).
 const EXT_ROOT = path.resolve(__dirname, '..', 'extensions');
-// Webview uses partition "persist:pancake" -> extensions must load into it.
+// All webviews share one persistent inbox/session.
 const PARTITION = 'persist:pancake';
 
 // In-memory status table, keyed by folder name.

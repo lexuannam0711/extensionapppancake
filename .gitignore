@@ -15,8 +15,9 @@ node_modules/
 .vscode/
 skills-lock.json
 
-# Runtime data / uploads
+# Runtime data / uploads / backups
 server/data/*.json
+server/backups/
 uploads/*
 !server/data/.gitkeep
 !uploads/.gitkeep
@@ -26,10 +27,16 @@ uploads/*
 .DS_Store
 Thumbs.db
 
+# Test reports and artifacts
+playwright-report/
+test-results*/
+
 # Build outputs / caches
 dist/
 build/
 .cache/
+.npm-cache*/
 
-# Archives / packaged builds
+# Archives / packaged binaries
 *.zip
+*.exe

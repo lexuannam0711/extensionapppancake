@@ -1,7 +1,7 @@
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **pancake-desktop-ai-shortcut-bot-v3** (2074 symbols, 5847 relationships, 184 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **extensionapppancake** (10593 symbols, 23305 relationships, 300 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > If any GitNexus tool warns the index is stale, run `npx gitnexus analyze` in terminal first.
 
@@ -24,10 +24,10 @@ This project is indexed by GitNexus as **pancake-desktop-ai-shortcut-bot-v3** (2
 
 | Resource | Use for |
 |----------|---------|
-| `gitnexus://repo/pancake-desktop-ai-shortcut-bot-v3/context` | Codebase overview, check index freshness |
-| `gitnexus://repo/pancake-desktop-ai-shortcut-bot-v3/clusters` | All functional areas |
-| `gitnexus://repo/pancake-desktop-ai-shortcut-bot-v3/processes` | All execution flows |
-| `gitnexus://repo/pancake-desktop-ai-shortcut-bot-v3/process/{name}` | Step-by-step execution trace |
+| `gitnexus://repo/extensionapppancake/context` | Codebase overview, check index freshness |
+| `gitnexus://repo/extensionapppancake/clusters` | All functional areas |
+| `gitnexus://repo/extensionapppancake/processes` | All execution flows |
+| `gitnexus://repo/extensionapppancake/process/{name}` | Step-by-step execution trace |
 
 ## CLI
 

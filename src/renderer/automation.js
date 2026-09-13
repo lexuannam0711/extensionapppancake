@@ -14,6 +14,11 @@
     return String(el?.textContent || '').replace(/\s+/g, ' ').trim();
   }
 
+  function getPageKind() {
+    const href = String(location.href || '');
+    return window.PDBPancakeDom?.classifyPancakePage(document, href)?.kind || 'untrusted';
+  }
+
   // Pancake dùng framework (Vue/React) theo dõi value qua native setter.
   // Gán thẳng el.value KHÔNG kích hoạt setter đó -> composer bị coi là rỗng,
   // nút gửi không hiện (chỉ thấy nút like). Phải set qua native setter rồi
@@ -52,16 +57,7 @@
   }
 
   function getUnreadConversations() {
-    return Array.from(document.querySelectorAll('.conversation-list-item.unread'))
-      .filter(visible)
-      .map((el, index) => ({
-        index,
-        id: el.id || el.closest('[id]')?.id || `unread-${index}`,
-        name: text(el.querySelector('.name-text')),
-        snippet: text(el.querySelector('.snippet-text')),
-        tags: Array.from(el.querySelectorAll('.list-tags-conv .conversation_tags_item')).map(text).filter(Boolean),
-        hasTags: Array.from(el.querySelectorAll('.list-tags-conv .conversation_tags_item')).length > 0
-      }));
+    return window.PDBPancakeDom.collectUnreadConversations(document, { getComputedStyle });
   }
 
   // Đọc id cuộc trò chuyện đang được chọn (highlight) trong danh sách.
@@ -88,27 +84,13 @@
   }
 
   function findConversationElementById(id) {
-    if (!id) return document.querySelector('.conversation-list-item.unread');
-    const escaped = id.replace(/([ #;?%&,.+*~\':"!^$[\]()=>|/@])/g, '\\$1');
-    return document.getElementById(id) || document.querySelector(`#${escaped}`) || document.querySelector('.conversation-list-item.unread');
+    return window.PDBPancakeDom.findConversationElementById(document, id);
   }
 
   async function clickConversationById(id) {
-    const el = findConversationElementById(id);
-    if (!el) throw new Error('Không tìm thấy hội thoại unread để click');
-    const info = {
-      id: el.id || id,
-      name: text(el.querySelector('.name-text')),
-      snippet: text(el.querySelector('.snippet-text')),
-      tags: Array.from(el.querySelectorAll('.list-tags-conv .conversation_tags_item')).map(text).filter(Boolean),
-      hasTags: Array.from(el.querySelectorAll('.list-tags-conv .conversation_tags_item')).length > 0
-    };
-    window.__PDB_LAST__ = info;
-    el.scrollIntoView({ block: 'center', behavior: 'smooth' });
-    await sleep(200);
-    el.click();
-    await sleep(700);
-    return info;
+    const result = await window.PDBPancakeDom.clickConversationById(document, id);
+    if (result.ok) window.__PDB_LAST__ = result.info;
+    return result;
   }
 
   function getCurrentCustomerName() {
@@ -116,8 +98,15 @@
   }
 
   function getCurrentTags() {
+    const buttons = document.querySelectorAll('#listShowTags .btn-tag-item, .btn-tag-item');
+    if (document.querySelector('#listShowTags') || buttons.length) {
+      return window.PDBPancakeDom.readActiveTagNames(document, { getComputedStyle });
+    }
     const last = window.__PDB_LAST__;
-    if (last && Array.isArray(last.tags)) return last.tags;
+    if (last && Array.isArray(last.tags)) {
+      console.warn('[PDB] Tag panel unavailable; using conversation-row tags');
+      return last.tags;
+    }
     return [];
   }
 
@@ -131,6 +120,9 @@
     if (!tagName) return { ok: false, message: 'Thiếu tên tag' };
     const btn = findTagButtonByName(tagName);
     if (!btn) return { ok: false, message: `Không tìm thấy tag: ${tagName}` };
+    if (btn.querySelector('.ellipse')) {
+      return { ok: true, alreadyApplied: true, message: `Tag already applied: ${tagName}` };
+    }
     btn.scrollIntoView({ block: 'nearest' });
     await sleep(180);
     btn.click();
@@ -199,7 +191,7 @@
     const candidates = Array.from(document.querySelectorAll('.conv-action-btn')).filter(visible);
     return candidates.find((el) => {
       const d = el.querySelector('path')?.getAttribute('d') || '';
-      return d.startsWith('M14.5 7') || d.includes('M13.309 7.792') || d.includes('6.373V12.5');
+      return d.startsWith('M17.1591 7.47782') || d.startsWith('M14.5 7') || d.includes('M13.309 7.792') || d.includes('6.373V12.5');
     }) || null;
   }
 
@@ -213,6 +205,18 @@
 
   function getDomHealthFromStatus(status) {
     const missing = [];
+    if (!status.isChatPage) {
+      missing.push(status.pageKind === 'auth' ? 'auth_required' : 'wrong_page');
+      return {
+        level: 'FAIL',
+        canRead: true,
+        canTypeReply: false,
+        canSend: false,
+        canTag: false,
+        canMarkUnread: false,
+        missing
+      };
+    }
     if (!status.hasReplyBox) missing.push('reply_box');
     if (!status.hasSendButton) missing.push('send_button');
     if (!status.tagButtons.length) missing.push('tag_buttons');
@@ -234,8 +238,11 @@
   }
 
   async function getDomStatus() {
+    const pageKind = getPageKind();
     const status = {
       url: location.href,
+      pageKind,
+      isChatPage: pageKind === 'chat',
       unreadCount: document.querySelectorAll('.conversation-list-item.unread').length,
       hasReplyBox: Boolean(document.querySelector('textarea#replyBoxComposer')),
       tagButtons: Array.from(document.querySelectorAll('#listShowTags .btn-tag-item')).map(text),
@@ -311,6 +318,27 @@
     return result;
   }
 
+  function openCustomerOrders() {
+    const link = document.querySelector('.link-order-list');
+    if (!link || !visible(link)) {
+      return { ok: false, code: 'ORDER_CONTROL_NOT_FOUND', orderCount: 0 };
+    }
+
+    const label = text(link);
+    const countMatch = label.match(/\((\d+)\)/);
+    const orderCount = countMatch ? Number(countMatch[1]) || 0 : 0;
+    const href = String(link.href || link.getAttribute?.('href') || '').trim();
+    if (href) {
+      if (!window.PDBPancakeUrlPolicy?.isAllowedAutomationUrl?.(href)) {
+        return { ok: false, code: 'ORDER_URL_UNTRUSTED', orderCount };
+      }
+      return { ok: true, mode: 'url', url: href, orderCount };
+    }
+
+    if (typeof link.click === 'function') link.click();
+    return { ok: true, mode: 'panel', url: '', orderCount };
+  }
+
   window.__PDB__ = {
     sleep,
     waitForSelector,
@@ -332,7 +360,8 @@
     getDomHealth,
     getRecentMessages,
     getLastMessageSender,
-    getCustomerOrderStatus
+    getCustomerOrderStatus,
+    openCustomerOrders
   };
   return true;
 })();

@@ -3,6 +3,31 @@ function shouldSkipByTags(info) {
   return Boolean(info.hasTags || (info.tags || []).length > 0);
 }
 
+function cloneConversationInfo(info) {
+  const rowInfo = info && typeof info === 'object' ? info : {};
+  const tags = Array.isArray(rowInfo.tags) ? [...rowInfo.tags] : [];
+  return {
+    ...rowInfo,
+    tags,
+    hasTags: Boolean(rowInfo.hasTags || tags.length > 0)
+  };
+}
+
+async function readEffectiveConversationInfo({ info, readCurrentTags, onWarning } = {}) {
+  try {
+    const currentTags = await readCurrentTags();
+    if (!Array.isArray(currentTags)) throw new TypeError('Current tags must be an array');
+    return {
+      ...(info && typeof info === 'object' ? info : {}),
+      tags: [...currentTags],
+      hasTags: currentTags.length > 0
+    };
+  } catch (error) {
+    if (typeof onWarning === 'function') await onWarning(error);
+    return cloneConversationInfo(info);
+  }
+}
+
 function decideBeforeAnalysis({ info, lastSender, settings } = {}) {
   const hasTags = shouldSkipByTags(info);
   const tagName = settings?.newCustomerTagName || 'Saruto Mới';
@@ -138,6 +163,7 @@ function shouldRecordManualExample({ assistantEnabled, learnExamplesEnabled = tr
 
 const PDBBotDecision = {
   shouldSkipByTags,
+  readEffectiveConversationInfo,
   decideBeforeAnalysis,
   decideAfterAnalysis,
   decideBeforeSend,

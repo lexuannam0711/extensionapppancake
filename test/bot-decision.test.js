@@ -4,10 +4,76 @@ const assert = require('node:assert/strict');
 const PDBBotDecision = require('../src/renderer/botDecision');
 const {
   shouldSkipByTags,
+  readEffectiveConversationInfo,
   decideBeforeAnalysis,
   decideAfterAnalysis,
   decideBeforeSend
 } = PDBBotDecision;
+
+test('bot decision: live tags replace stale row tags without mutating either input', async () => {
+  const info = { id: 'conversation-1', hasTags: false, tags: [] };
+  const liveTags = ['Nhãn Saruto VIP'];
+
+  const effectiveInfo = await readEffectiveConversationInfo({
+    info,
+    readCurrentTags: async () => liveTags
+  });
+
+  assert.notEqual(effectiveInfo, info);
+  assert.notEqual(effectiveInfo.tags, liveTags);
+  assert.deepEqual(effectiveInfo, {
+    id: 'conversation-1',
+    hasTags: true,
+    tags: ['Nhãn Saruto VIP']
+  });
+  assert.deepEqual(info, { id: 'conversation-1', hasTags: false, tags: [] });
+  liveTags.push('Later mutation');
+  assert.deepEqual(effectiveInfo.tags, ['Nhãn Saruto VIP']);
+});
+
+test('bot decision: verified empty live tags clear stale row tags', async () => {
+  const effectiveInfo = await readEffectiveConversationInfo({
+    info: { id: 'conversation-1', hasTags: true, tags: ['Nhãn Saruto VIP'] },
+    readCurrentTags: async () => []
+  });
+
+  assert.deepEqual(effectiveInfo, {
+    id: 'conversation-1',
+    hasTags: false,
+    tags: []
+  });
+});
+
+test('bot decision: tag read rejection warns once and retains cloned row tags', async () => {
+  const error = new Error('tag panel unavailable');
+  const warnings = [];
+  const info = { id: 'conversation-1', hasTags: true, tags: ['Row tag'] };
+
+  const effectiveInfo = await readEffectiveConversationInfo({
+    info,
+    readCurrentTags: async () => { throw error; },
+    onWarning: async (caught) => warnings.push(caught)
+  });
+
+  assert.deepEqual(warnings, [error]);
+  assert.notEqual(effectiveInfo, info);
+  assert.notEqual(effectiveInfo.tags, info.tags);
+  assert.deepEqual(effectiveInfo, info);
+});
+
+test('bot decision: malformed live tags warn and retain row tags', async () => {
+  const warnings = [];
+
+  const effectiveInfo = await readEffectiveConversationInfo({
+    info: { hasTags: true, tags: ['Row tag'] },
+    readCurrentTags: async () => 'not-an-array',
+    onWarning: async (error) => warnings.push(error)
+  });
+
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0].message, /array/i);
+  assert.deepEqual(effectiveInfo, { hasTags: true, tags: ['Row tag'] });
+});
 
 test('bot decision: shouldSkipByTags matches current tag semantics', () => {
   assert.equal(shouldSkipByTags(null), false);
