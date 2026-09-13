@@ -12,6 +12,7 @@ const { isAllowedGuestNavigation, resolveGuestNavigation } = require('./guestSec
 const { resolvePreferredPancakeUrl } = require('./renderer/pancakeUrlPolicy');
 const { isDevToolsEnabled, withDevToolsPreference } = require('./devtoolsPolicy');
 const { createControlPlaneClient } = require('./control-plane/client');
+const { resolveClientConfig } = require('./control-plane/clientConfig');
 
 // Silence the dev-only "allowpopups" security warning (webview needs popups
 // for Pancake/Facebook OAuth flows). This warning never shows once packaged.
@@ -219,6 +220,7 @@ function registerIpcHandlers() {
 
 async function createWindow() {
   require('dotenv').config({ path: path.join(app.getPath('appData'), 'PancakeDesktopAIShortcutBot', '.env'), override: false });
+  const clientConfig = resolveClientConfig(process.env);
   configureStorePaths({
     dataRoot: path.join(app.getPath('appData'), 'PancakeDesktopAIShortcutBot', 'data'),
     uploadsRoot: path.join(app.getPath('appData'), 'PancakeDesktopAIShortcutBot', 'uploads'),
@@ -226,9 +228,9 @@ async function createWindow() {
   });
   const { startServer } = require('./server/index');
   controlPlaneClient = createControlPlaneClient({
-    controlPlaneUrl: process.env.CONTROL_PLANE_URL,
-    supabaseUrl: process.env.SUPABASE_URL,
-    supabaseAnonKey: process.env.SUPABASE_ANON_KEY,
+    controlPlaneUrl: clientConfig.controlPlaneUrl,
+    supabaseUrl: clientConfig.supabaseUrl,
+    supabaseAnonKey: clientConfig.supabaseAnonKey,
     safeStorage,
     userDataPath: app.getPath('userData'),
     channel: 'modern',
