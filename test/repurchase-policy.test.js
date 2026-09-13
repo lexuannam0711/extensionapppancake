@@ -47,13 +47,18 @@ function mockAI(result, { ok = true } = {}) {
 }
 
 function analyze(overrides = {}) {
+  const settings = {
+    aiApiKey: 'test-key',
+    minConfidence: 0.75,
+    ...(overrides.settings || {})
+  };
   return analyzeMessageWithAI({
     customerMessage: 'chị đang dùng sản phẩm thế nào',
     shortcuts,
     context: { currentTags: ['Nhãn Saruto VIP'] },
-    settings: { aiApiKey: 'test-key', minConfidence: 0.75 },
     history: [],
-    ...overrides
+    ...overrides,
+    settings
   });
 }
 
