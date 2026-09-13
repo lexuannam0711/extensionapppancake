@@ -22,7 +22,7 @@ function readVersion(filePath) {
   return version;
 }
 
-function validateReleaseVersion({ tag = process.env.GITHUB_REF_NAME || '', root = path.resolve(__dirname, '..') } = {}) {
+function validateReleaseVersion({ tag = '', root = path.resolve(__dirname, '..') } = {}) {
   const versions = [readVersion(path.join(root, 'package.json')), readVersion(path.join(root, 'package-lock.json'))];
   if (new Set(versions).size !== 1) throw new Error(`Package versions must match: ${versions.join(', ')}`);
   const version = tag ? normalizeTag(tag) : versions[0];
@@ -31,7 +31,10 @@ function validateReleaseVersion({ tag = process.env.GITHUB_REF_NAME || '', root 
 
 if (require.main === module) {
   try {
-    const result = validateReleaseVersion({ tag: arg('--tag') || process.env.GITHUB_REF_NAME || '' });
+    const explicitTag = arg('--tag');
+    const isTagRef = process.env.GITHUB_REF_TYPE === 'tag';
+    const tag = explicitTag || (isTagRef ? (process.env.GITHUB_REF_NAME || '') : '');
+    const result = validateReleaseVersion({ tag });
     console.log(`Release version validated: ${result.version}`);
   } catch (error) {
     console.error(error.message);
