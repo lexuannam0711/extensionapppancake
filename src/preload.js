@@ -19,5 +19,14 @@ contextBridge.exposeInMainWorld('pancakeDesktop', {
   // Extension management (Chrome-like store).
   listExtensions: () => ipcRenderer.invoke('ext:list'),
   reloadExtensions: (folderName) => ipcRenderer.invoke('ext:reload', folderName),
-  openExtensionsFolder: () => ipcRenderer.invoke('ext:open-folder')
+  openExtensionsFolder: () => ipcRenderer.invoke('ext:open-folder'),
+  // Auto-update bridge (electron-updater)
+  getUpdateState: () => ipcRenderer.invoke('updater:get-state'),
+  checkForUpdates: () => ipcRenderer.invoke('updater:check'),
+  quitAndInstall: () => ipcRenderer.invoke('updater:quit-and-install'),
+  onUpdateState: (callback) => ipcRenderer.on('updater:state', (_evt, state) => callback(state)),
+  onUpdateAvailable: (callback) => ipcRenderer.on('updater:available', (_evt, info) => callback(info)),
+  onUpdateProgress: (callback) => ipcRenderer.on('updater:progress', (_evt, progress) => callback(progress)),
+  onUpdateDownloaded: (callback) => ipcRenderer.on('updater:downloaded', (_evt, info) => callback(info)),
+  onUpdateError: (callback) => ipcRenderer.on('updater:error', (_evt, err) => callback(err))
 });

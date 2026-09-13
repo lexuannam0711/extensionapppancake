@@ -7,9 +7,9 @@ const vm = require('node:vm');
 const pancakeDom = require('../src/renderer/pancakeDom');
 const pancakeUrlPolicy = require('../src/renderer/pancakeUrlPolicy');
 
-function loadAutomationAtPancakeRoot() {
+function loadAutomationAtPancakeRoot({ documentOverride } = {}) {
   const chatShellSelector = '.conversation-list-item, #messageCol, .message-list, textarea#replyBoxComposer';
-  const document = {
+  const document = documentOverride || {
     querySelector(selector) {
       if (selector === chatShellSelector || selector === 'textarea#replyBoxComposer') return {};
       return null;
@@ -51,4 +51,26 @@ test('automation status uses the shared DOM classifier for the Pancake root chat
   assert.equal(status.isChatPage, true);
   assert.notEqual(status.health.level, 'FAIL');
   assert.doesNotMatch(status.health.missing.join(','), /wrong_page/);
+});
+
+test('finds Pancake new Mail Unread action button', () => {
+  let clicks = 0;
+  const path = { getAttribute: (name) => name === 'd' ? 'M17.1591 7.47782' : '' };
+  const button = {
+    getBoundingClientRect: () => ({ width: 20, height: 20 }),
+    querySelector: (selector) => selector === 'path' ? path : null,
+    click: () => { clicks += 1; }
+  };
+  const document = {
+    querySelector: () => null,
+    querySelectorAll: (selector) => selector === '.conv-action-btn' ? [button] : [],
+    getElementById: () => null
+  };
+  const automation = loadAutomationAtPancakeRoot({ documentOverride: document });
+
+  assert.equal(automation.findMarkUnreadButton(), true);
+  return automation.markCurrentConversationUnread().then((result) => {
+    assert.equal(result.ok, true);
+    assert.equal(clicks, 1);
+  });
 });

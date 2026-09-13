@@ -191,7 +191,7 @@
     const candidates = Array.from(document.querySelectorAll('.conv-action-btn')).filter(visible);
     return candidates.find((el) => {
       const d = el.querySelector('path')?.getAttribute('d') || '';
-      return d.startsWith('M14.5 7') || d.includes('M13.309 7.792') || d.includes('6.373V12.5');
+      return d.startsWith('M17.1591 7.47782') || d.startsWith('M14.5 7') || d.includes('M13.309 7.792') || d.includes('6.373V12.5');
     }) || null;
   }
 

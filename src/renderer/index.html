@@ -10,39 +10,51 @@
 <body>
   <div class="app-shell">
     <main class="browser-pane">
-      <div class="browser-toolbar">
-        <div class="browser-tabs-bar">
-          <button class="browser-tab active" data-wvtab="bot1" aria-label="Tab Bot 1">Bot 1</button>
-          <button class="browser-tab" data-wvtab="bot2" aria-label="Tab Bot 2">Bot 2</button>
-          <button class="browser-tab" data-wvtab="manual" aria-label="Tab thủ công">Tab 3</button>
+      <div class="browser-toolbar top-toolbar" role="toolbar" aria-label="Pancake Desktop controls">
+        <div class="toolbar-identity"><span class="toolbar-mark" aria-hidden="true">P</span><span class="toolbar-app-name">Pancake AI</span></div>
+        <div class="browser-tabs-bar" role="tablist" aria-label="Bot tabs">
+          <button class="browser-tab active" data-wvtab="bot1" aria-label="Tab Bot 1" aria-selected="true">Bot 1</button>
+          <button class="browser-tab" data-wvtab="bot2" aria-label="Tab Bot 2" aria-selected="false">Bot 2</button>
+          <button class="browser-tab" data-wvtab="manual" aria-label="Tab thủ công" aria-selected="false">Tab 3</button>
         </div>
-        <input id="urlInput" class="url-input" placeholder="https://pancake.vn/multi_pages" />
-        <button id="goBtn" class="btn small icon-btn" aria-label="Mở URL" data-icon="arrow-right"></button>
-        <button id="reloadBtn" class="btn small ghost icon-btn" aria-label="Reload" data-icon="refresh"></button>
-        <button id="pancakeLoginBtn" class="btn small ghost" aria-label="Mở trang đăng nhập" hidden>Đăng nhập</button>
-        <div id="accountAuth" class="account-auth" hidden>
-          <input id="accountEmail" type="email" autocomplete="username" placeholder="Operator email" aria-label="Operator email" />
-          <input id="accountPassword" type="password" autocomplete="current-password" placeholder="Password" aria-label="Password" />
-          <button id="authLoginBtn" class="btn small ghost" type="button">Sign in</button>
-          <button id="authLogoutBtn" class="btn small ghost" type="button" hidden>Sign out</button>
-          <span id="authStatus" class="status muted" role="status">Not configured</span>
+        <div class="toolbar-navigation">
+          <span class="toolbar-search-icon" aria-hidden="true">⌕</span>
+          <input id="urlInput" class="url-input" placeholder="https://pancake.vn/dashboard" aria-label="Pancake address" />
+          <button id="goBtn" class="btn small icon-btn toolbar-go" aria-label="Mở URL" data-icon="arrow-right"></button>
+          <button id="reloadBtn" class="btn small ghost icon-btn" aria-label="Reload" data-icon="refresh"></button>
         </div>
-        <button id="themeBtn" class="btn small ghost icon-btn" aria-label="Chuyển sáng/tối" data-icon="moon"></button>
-        <span id="webviewStatus" class="status muted" style="font-size:9px;max-width:80px;overflow:hidden;text-overflow:ellipsis"></span>
+        <span class="operator-chip">Operator</span>
+        <button id="pancakeLoginBtn" class="btn small toolbar-sign-in" aria-label="Mở trang đăng nhập">Sign in</button>
+        <button id="settingsBtn" class="btn small toolbar-settings" aria-label="Mở Settings">Settings</button>
+        <div class="toolbar-session" aria-hidden="true">
+          <span id="authStatusCompact" class="status-chip muted" role="status" hidden>Offline</span>
+          <span id="webviewStatus" class="status muted" title="WebView status"></span>
+        </div>
       </div>
+      <div class="webview-surface-header" aria-hidden="true">
+        <span>LIVE WEBVIEW</span><span id="webviewConnectionStatus" class="surface-status connecting">Connecting</span>
+      </div>
+      <div id="webviewLoading" class="webview-state loading" hidden><span class="spinner"></span><span>Connecting to Pancake…</span></div>
+      <div id="webviewError" class="webview-state error" hidden><span>Pancake connection failed</span><button id="retryWebviewBtn" class="btn small">Retry</button></div>
       <webview id="botView1" class="pancake-view wv-active" allowpopups partition="persist:pancake"></webview>
       <webview id="botView2" class="pancake-view wv-hidden" allowpopups partition="persist:pancake"></webview>
       <webview id="manualView" class="pancake-view wv-hidden" allowpopups partition="persist:pancake"></webview>
     </main>
+    <section class="bot-status-card" aria-live="polite">
+      <span class="status-card-dot" aria-hidden="true"></span>
+      <div><strong id="floatingBotLabel">Bot 1</strong><span id="floatingBotStatus">Ready</span></div>
+    </section>
 
     <!-- Mini control rail: luôn hiện bám mép phải -->
     <aside id="miniRail" class="mini-rail">
-      <button id="miniBotBtn" class="mini-btn" aria-label="Bật/tắt bot"><span class="mini-dot"></span><span data-icon="play"></span></button>
-      <button id="miniAutoClickBtn" class="mini-btn" aria-label="Bật/tắt Auto Click (tốc độ cao)"><span class="mini-dot"></span><span data-icon="zap"></span></button>
-      <button id="miniQueueBtn" class="mini-btn" aria-label="Hàng đợi chờ xử lý"><span data-icon="clock"></span><span id="miniQueueBadge" class="badge">0</span></button>
-      <button id="miniSuggestBtn" class="mini-btn" aria-label="Gợi ý"><span data-icon="lightbulb"></span></button>
-      <button id="miniPanelBtn" class="mini-btn" aria-label="Mở bảng điều khiển"><span data-icon="menu"></span></button>
+      <button id="miniBotBtn" class="mini-btn" aria-label="Bật/tắt bot" data-tooltip="Run bot"><span class="mini-dot"></span><span data-icon="play"></span><span class="mini-label">Run</span></button>
+      <button id="miniAutoClickBtn" class="mini-btn" aria-label="Bật/tắt Auto Click (tốc độ cao)"><span class="mini-dot"></span><span data-icon="zap"></span><span class="mini-label">Auto</span></button>
+      <button id="miniAutoReplyPreviewBtn" class="mini-btn" aria-label="Bật/tắt bot chạy bình luận Preview Reply" data-tooltip="Comment bot"><span class="mini-dot"></span><span data-icon="message"></span><span class="mini-label">Comment</span></button>
+      <button id="miniQueueBtn" class="mini-btn" aria-label="Hàng đợi chờ xử lý"><span data-icon="clock"></span><span class="mini-label">Queue</span><span id="miniQueueBadge" class="badge">0</span></button>
+      <button id="miniSuggestBtn" class="mini-btn" aria-label="Gợi ý"><span data-icon="lightbulb"></span><span class="mini-label">AI</span></button>
+      <button id="miniPanelBtn" class="mini-btn" aria-label="Mở bảng điều khiển" data-tooltip="Controls"><span data-icon="menu"></span><span class="mini-label">Controls</span></button>
     </aside>
+    <div id="panelBackdrop" class="panel-backdrop" hidden aria-hidden="true"></div>
     <aside class="control-panel">
       <div class="panel-titlebar" id="panelTitlebar">
         <span class="panel-titlebar-label">Bảng điều khiển</span>
@@ -62,6 +74,7 @@
       <nav class="tabs">
         <button class="tab active" data-tab="overview">Tổng quan</button>
         <button class="tab" data-tab="bot">Bot</button>
+        <button class="tab" data-tab="autoReplyPreview">Preview Reply</button>
         <button class="tab" data-tab="shortcuts">Excel</button>
         <button class="tab" data-tab="ai">Gợi ý</button>
         <button class="tab" data-tab="dom">DOM Test</button>
@@ -123,6 +136,26 @@
             <button id="startAutoClickBtn" class="btn success">Start Auto Click</button>
             <button id="stopAutoClickBtn" class="btn danger">Dừng</button>
           </div>
+        </div>
+      </section>
+
+      <section id="autoReplyPreview" class="tab-panel">
+        <div class="card">
+          <div class="card-title-row"><h3>Auto Reply Preview</h3><span id="autoReplyPreviewStatus" class="tab-runtime-status">idle</span></div>
+          <p class="hint">Luồng riêng: mở preview, xác minh đã gửi, rồi mới gửi ô trả lời ngoài. Không chạy đồng thời với Bot hoặc Auto Click.</p>
+          <div class="form-row"><label>Shortcut</label><input id="autoReplyPreviewShortcut" value="/2" /></div>
+          <div class="form-row"><label>Chờ sau khi chọn khách (ms)</label><input id="autoReplyPreviewWaitAfterClick" type="number" min="250" value="2000" /></div>
+          <div class="form-row"><label>Chờ trước Enter preview (ms)</label><input id="autoReplyPreviewWaitBeforePreview" type="number" min="250" value="2000" /></div>
+          <div class="form-row"><label>Cửa sổ xác nhận preview (ms)</label><input id="autoReplyPreviewWaitBeforeOuter" type="number" min="250" value="6000" /></div>
+          <div class="form-row"><label>Khoảng nghỉ giữa vòng (ms)</label><input id="autoReplyPreviewLoopDelay" type="number" min="250" value="1000" /></div>
+          <div class="form-row"><label>Timeout DOM (ms)</label><input id="autoReplyPreviewSelectorTimeout" type="number" min="1000" value="15000" /></div>
+          <div class="actions">
+            <button id="saveAutoReplyPreviewBtn" class="btn">Lưu thông số</button>
+            <button id="startAutoReplyPreviewBtn" class="btn success">Bắt đầu</button>
+            <button id="stopAutoReplyPreviewBtn" class="btn danger">Dừng</button>
+          </div>
+          <div id="autoReplyPreviewProgress" class="auto-reply-preview-status">Chưa chạy</div>
+          <div id="autoReplyPreviewError" class="auto-reply-preview-error" hidden></div>
         </div>
       </section>
 
@@ -234,7 +267,31 @@
       </section>
     </aside>
   </div>
+    <footer class="bottom-status-bar" role="status" aria-live="polite">
+      <span class="footer-label">Shortcut</span>
+      <button class="shortcut-dock-btn" type="button" data-shortcut="/1">/1</button>
+      <button class="shortcut-dock-btn" type="button" data-shortcut="/2">/2</button>
+      <button class="shortcut-dock-btn" type="button" data-shortcut="/3">/3</button>
+      <span class="bottom-status-spacer"></span>
+      <span id="bottomSystemStatus">All systems operational</span>
+      <span id="bottomLastSync">Last sync just now</span>
+      <span id="bottomWebviewStatus">WebView ready</span>
+      <button id="bottomWebviewBtn" class="bottom-webview-btn" type="button" aria-label="WebView status">↔ WebView</button>
+    </footer>
   <div id="toast" class="toast hidden"></div>
+  <div id="updateToast" class="update-toast hidden" role="alert">
+    <div class="update-toast-content">
+      <div class="update-toast-title">Bản cập nhật mới</div>
+      <div id="updateToastMsg" class="update-toast-msg">Đang kiểm tra...</div>
+      <div id="updateProgressWrap" class="update-progress-wrap hidden">
+        <div id="updateProgressBar" class="update-progress-bar" style="width: 0%;"></div>
+      </div>
+    </div>
+    <div class="update-toast-actions">
+      <button id="updateInstallBtn" class="btn small success hidden" type="button">Khởi động lại</button>
+      <button id="updateDismissBtn" class="btn small ghost" type="button" aria-label="Đóng">✕</button>
+    </div>
+  </div>
   <script src="icons.js"></script>
   <script src="botDecision.js"></script>
   <script src="conversationClaims.js"></script>
@@ -244,6 +301,7 @@
   <script src="pancakeDom.js"></script>
   <script src="pancakeAutomationGate.js"></script>
   <script src="pancakeAutomationPayload.js"></script>
+  <script src="autoReplyPreview.js"></script>
   <script src="webviewAutomation.js"></script>
   <script src="webviewTabNavigation.js"></script>
   <script src="app.js"></script>

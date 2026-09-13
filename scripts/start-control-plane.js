@@ -30,12 +30,10 @@ const repository = hasSupabase
 const allowedHosts = String(process.env.UPDATE_ALLOWED_HOSTS || '').split(',').map((item) => item.trim().toLowerCase()).filter(Boolean);
 const publicKey = String(process.env.UPDATE_PUBLIC_KEY || '');
 const manifestSources = {
-  modern: process.env.UPDATE_MANIFEST_MODERN_URL || process.env.UPDATE_MANIFEST_MODERN_PATH || '',
-  win7: process.env.UPDATE_MANIFEST_WIN7_URL || process.env.UPDATE_MANIFEST_WIN7_PATH || ''
+  modern: process.env.UPDATE_MANIFEST_MODERN_URL || process.env.UPDATE_MANIFEST_MODERN_PATH || ''
 };
 const manifests = {
-  modern: manifestSources.modern && !/^https:\/\//i.test(manifestSources.modern) ? loadManifest(manifestSources.modern) : null,
-  win7: manifestSources.win7 && !/^https:\/\//i.test(manifestSources.win7) ? loadManifest(manifestSources.win7) : null
+  modern: manifestSources.modern && !/^https:\/\//i.test(manifestSources.modern) ? loadManifest(manifestSources.modern) : null
 };
 if ((Object.values(manifests).some(Boolean) || Object.values(manifestSources).some(Boolean)) && !publicKey) throw new Error('UPDATE_PUBLIC_KEY is required when release manifests are configured');
 const releaseProvider = createReleaseProvider(manifests, { publicKey, allowedHosts });
@@ -53,7 +51,7 @@ const port = Number(process.env.CONTROL_PLANE_PORT || process.env.PORT || 8788);
 const host = process.env.CONTROL_PLANE_HOST || '127.0.0.1';
 
 async function refreshManifests() {
-  for (const channel of ['modern', 'win7']) {
+  for (const channel of ['modern']) {
     const source = manifestSources[channel];
     if (!source || !/^https:\/\//i.test(source)) continue;
     manifests[channel] = await fetchManifest(source, allowedHosts);

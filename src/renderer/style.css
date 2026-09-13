@@ -105,6 +105,7 @@ body { margin: 0; background: var(--bg); color: var(--text); overflow: hidden; -
 .mini-btn.on .mini-dot { background: var(--on-accent); }
 /* Auto Click bật: nền cam để phân biệt với bot (xanh); chỉ đổi màu, không animate paint */
 .mini-btn#miniAutoClickBtn.on { background: var(--amber, #d97706); color: #fff; border-color: var(--amber, #d97706); }
+.mini-btn#miniAutoReplyPreviewBtn.on { background: #2563eb; color: #fff; border-color: #2563eb; }
 .mini-rail.hidden { opacity: 0; pointer-events: none; }
 /* Badge số trên nút hàng đợi (không live-dot) */
 #miniQueueBadge {
@@ -600,3 +601,180 @@ tbody tr:hover { background: var(--surface-2); }
 .bot-stats .grid.two { gap: 8px; }
 .bot-stats-top { list-style: none; margin: 6px 0 0; padding: 0; display: grid; gap: 4px; }
 .bot-stats-top li { font-size: 13px; color: var(--text); }
+/* Figma handoff shell */
+:root {
+  --chrome-bg: #f6f7fa;
+  --chrome-surface: #ffffff;
+  --chrome-text: #171c29;
+  --chrome-muted: #636e80;
+  --chrome-border: #e0e3eb;
+  --chrome-primary: #6b52e5;
+  --chrome-primary-soft: #f0ebff;
+  --chrome-success: #2ea66b;
+  --chrome-success-soft: #e5faed;
+  --chrome-error: #d95c5c;
+  --chrome-error-soft: #fff0f0;
+  --chrome-shadow: 0 8px 24px rgba(23, 28, 41, .08);
+  --chrome-radius: 18px;
+}
+.auto-reply-preview-status { margin-top: 12px; padding: 10px 12px; border-radius: 10px; background: var(--ghost-bg); color: var(--muted); font-size: 12px; }
+.auto-reply-preview-error { margin-top: 8px; padding: 10px 12px; border-radius: 10px; background: #fff1f2; color: #be123c; font-size: 12px; }
+html, body { background: var(--chrome-bg); }
+body { color: var(--chrome-text); font-family: Inter, "Segoe UI", system-ui, sans-serif; }
+.app-shell { display: block; position: relative; width: 100vw; height: 100dvh; overflow: hidden; background: var(--chrome-bg); }
+.browser-pane { position: relative; width: 100%; height: 100dvh; min-width: 0; background: var(--chrome-bg); }
+.top-toolbar {
+  position: absolute; top: 20px; left: 26px; right: 26px; z-index: 130;
+  display: flex; align-items: center; gap: 12px; height: 82px; padding: 14px 18px;
+  border: 1px solid var(--chrome-border); border-radius: 24px; background: var(--chrome-surface); box-shadow: var(--chrome-shadow);
+  white-space: nowrap;
+}
+.toolbar-identity, .toolbar-navigation, .toolbar-session { display: flex; align-items: center; min-width: 0; }
+.toolbar-identity { flex: 0 0 178px; gap: 10px; }
+.toolbar-mark { display: grid; place-items: center; width: 44px; height: 44px; border-radius: 50%; background: var(--chrome-primary-soft); color: var(--chrome-primary); font-size: 20px; font-weight: 700; }
+.toolbar-app-name { color: var(--chrome-text); font-size: 16px; font-weight: 700; line-height: 1.15; }
+.toolbar-app-name::after { content: "Shortcut Bot"; display: block; margin-top: 3px; color: var(--chrome-muted); font-size: 11px; font-weight: 400; }
+.browser-tabs-bar { display: flex; flex: 0 0 auto; gap: 6px; padding: 0; background: transparent; }
+.browser-tab { min-width: 92px; height: 50px; padding: 0 18px; border: 0; border-radius: 25px; background: #f5f6f9; color: var(--chrome-muted); font-size: 14px; font-weight: 600; white-space: nowrap; }
+.browser-tab.active { background: var(--chrome-primary-soft); color: var(--chrome-primary); box-shadow: none; }
+.browser-tab.running::after { background: var(--chrome-success); }
+.toolbar-navigation { flex: 1 1 300px; gap: 8px; min-width: 220px; height: 50px; padding: 0 10px; border: 1px solid var(--chrome-border); border-radius: 13px; background: #f8f9fb; }
+.toolbar-search-icon { color: var(--chrome-muted); font-size: 17px; line-height: 1; }
+.toolbar-navigation .url-input { flex: 1 1 auto; min-width: 0; height: 46px; padding: 0; border: 0; background: transparent; color: var(--chrome-muted); font-size: 14px; }
+.toolbar-navigation .url-input:focus { box-shadow: none; }
+.toolbar-navigation .btn.small { flex: 0 0 36px; width: 36px; height: 36px; padding: 0; border-radius: 10px; }
+.toolbar-go { background: #18251f; color: #fff; }
+.operator-chip, .toolbar-settings { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; height: 50px; padding: 0 22px; border: 1px solid var(--chrome-border); border-radius: 25px; background: #fff; color: var(--chrome-muted); font-size: 14px; font-weight: 600; }
+.toolbar-sign-in { flex: 0 0 auto; height: 50px; min-width: 112px; padding: 0 22px; border: 0; border-radius: 25px; background: #202330; color: #fff; font-size: 14px; font-weight: 700; }
+.toolbar-settings { color: var(--chrome-text); }
+.toolbar-settings:hover, .operator-chip:hover { background: #f8f9fb; }
+.toolbar-session { flex: 0 0 auto; gap: 8px; }
+.toolbar-session #webviewStatus { display: none; }
+.status-chip { min-width: 112px; padding: 14px 20px; border: 0; border-radius: 25px; background: var(--chrome-success-soft); color: var(--chrome-success); font-size: 14px; font-weight: 700; text-align: center; }
+.webview-surface-header { position: absolute; top: 144px; left: 26px; right: 26px; z-index: 4; display: flex; align-items: center; justify-content: space-between; height: 50px; padding: 0 22px; border: 1px solid var(--chrome-border); border-bottom: 0; border-radius: 24px 24px 0 0; background: #fff; color: var(--chrome-muted); font-size: 11px; font-weight: 700; letter-spacing: .03em; pointer-events: none; }
+.surface-status { padding: 8px 20px; border-radius: 999px; background: var(--chrome-success-soft); color: var(--chrome-success); font-size: 11px; font-weight: 700; letter-spacing: 0; }
+.surface-status.connecting { background: #f4f1ff; color: var(--chrome-primary); }
+.surface-status.error { background: var(--chrome-error-soft); color: var(--chrome-error); }
+.pancake-view { position: absolute; top: 194px; left: 26px; right: 26px; bottom: 28px; z-index: 2; width: auto; height: auto; border: 1px solid var(--chrome-border); border-radius: 0 0 24px 24px; background: #f6f7fa; }
+.webview-state { position: absolute; z-index: 12; display: flex; align-items: center; gap: 10px; pointer-events: none; }
+.webview-state[hidden] { display: none; }
+.webview-state.loading { top: 276px; left: 50%; transform: translateX(-50%); color: var(--chrome-muted); font-size: 13px; }
+.webview-state.error { top: 276px; left: 50%; transform: translateX(-50%); padding: 12px 16px; border: 1px solid #f0d5d5; border-radius: 12px; background: var(--chrome-error-soft); color: var(--chrome-error); font-size: 13px; pointer-events: auto; }
+.webview-state.error .btn { pointer-events: auto; }
+.spinner { width: 16px; height: 16px; border: 2px solid #ded7ff; border-top-color: var(--chrome-primary); border-radius: 50%; animation: shellSpin .8s linear infinite; }
+@keyframes shellSpin { to { transform: rotate(360deg); } }
+.mini-rail { position: fixed; top: 296px; right: 42px; z-index: 150; display: flex; flex-direction: column; align-items: center; gap: 12px; width: 84px; height: 412px; padding: 16px 10px; border: 1px solid var(--chrome-border); border-radius: 28px; background: #fff; box-shadow: var(--chrome-shadow); }
+.mini-btn { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5px; width: 64px; height: 64px; padding: 0; border: 0; border-radius: 18px; background: transparent; color: var(--chrome-muted); font-size: 18px; }
+.mini-btn:hover, .mini-btn:focus-visible, .mini-btn.on { background: var(--chrome-primary-soft); color: var(--chrome-primary); }
+.mini-label { color: inherit; font-size: 10px; font-weight: 600; line-height: 1; }
+.mini-dot { top: 6px; right: 8px; }
+.bot-status-card { position: fixed; left: 46px; bottom: 78px; z-index: 140; display: flex; align-items: center; gap: 10px; min-width: 276px; height: 110px; padding: 18px; border: 1px solid var(--chrome-border); border-radius: 18px; background: #fff; box-shadow: var(--chrome-shadow); }
+.bot-status-card::before { content: "BOT 1"; position: absolute; top: 18px; left: 18px; color: var(--chrome-muted); font-size: 10px; font-weight: 700; }
+.bot-status-card > div { display: flex; align-items: center; gap: 18px; margin-top: 24px; }.bot-status-card > div strong { font-size: 15px; }.bot-status-card > div span { padding: 7px 18px; border-radius: 999px; background: var(--chrome-success-soft); color: var(--chrome-success); font-size: 11px; font-weight: 700; }
+.status-card-dot, .status-led { width: 8px; height: 8px; border-radius: 50%; background: var(--chrome-success); }
+.bottom-status-bar { position: fixed; left: 348px; right: 182px; bottom: 10px; z-index: 140; display: flex; align-items: center; gap: 12px; height: 46px; min-height: 46px; padding: 8px 20px; border: 1px solid var(--chrome-border); border-radius: 23px; background: rgba(255,255,255,.96); color: var(--chrome-muted); font-size: 12px; box-shadow: 0 4px 16px rgba(23,28,41,.06); }
+.bottom-status-bar b { color: var(--chrome-text); }.bottom-status-spacer { flex: 1; }.bottom-status-bar::before { content: "Shortcut"; color: var(--chrome-muted); margin-right: 4px; }
+.panel-backdrop { position: fixed; inset: 0; z-index: 900; background: rgba(23, 28, 41, .16); opacity: 1; transition: opacity .2s ease-out; }.panel-backdrop[hidden] { display: none; }
+.control-panel { z-index: 1000; width: min(432px, calc(100vw - 32px)); max-width: 432px; max-height: calc(100dvh - 40px); border-color: var(--chrome-border); border-radius: 18px; box-shadow: 0 18px 48px rgba(23,28,41,.18); }
+.control-panel.open { animation: panelIn .2s ease-out; }.panel-titlebar { border-radius: 18px 18px 0 0; }.panel-titlebar-label { color: var(--chrome-text); }
+.btn, .tab, .browser-tab, .mini-btn, .toolbar-sign-in, .toolbar-settings { transition: background-color .15s ease-out, color .15s ease-out, border-color .15s ease-out, transform .15s ease-out; }
+.browser-toolbar button:focus-visible, .mini-btn:focus-visible, .tab:focus-visible, .browser-tab:focus-visible { outline: 2px solid var(--chrome-primary); outline-offset: 2px; }
+@media (max-width: 1280px) { .toolbar-identity { flex-basis: 150px; }.browser-tab { min-width: 74px; padding: 0 12px; }.operator-chip { display: none; }.toolbar-sign-in { min-width: 88px; padding: 0 14px; }.toolbar-settings { padding: 0 14px; }.mini-rail { right: 22px; }.bottom-status-bar { left: 280px; right: 140px; } }
+@media (max-width: 1000px) { .toolbar-identity { flex-basis: 116px; }.toolbar-app-name { display: none; }.browser-tab { min-width: 62px; padding: 0 8px; }.toolbar-navigation { min-width: 160px; }.toolbar-sign-in { min-width: 72px; padding: 0 10px; }.toolbar-settings { font-size: 0; width: 50px; padding: 0; }.mini-rail { right: 14px; }.bot-status-card { left: 24px; }.bottom-status-bar { left: 220px; right: 110px; } }
+@media (max-width: 720px) { .top-toolbar { top: 8px; left: 8px; right: 8px; height: 58px; padding: 7px; border-radius: 16px; gap: 6px; }.toolbar-mark { width: 38px; height: 38px; }.browser-tabs-bar { display: none; }.toolbar-navigation { height: 42px; min-width: 0; padding: 0 6px; }.toolbar-navigation .url-input { height: 38px; font-size: 12px; }.toolbar-sign-in { min-width: 58px; height: 38px; padding: 0 8px; font-size: 11px; }.toolbar-settings { width: 38px; height: 38px; }.webview-surface-header { top: 78px; left: 8px; right: 8px; height: 40px; }.pancake-shell-header { top: 118px; left: 18px; right: 18px; height: 48px; padding: 0 20px; font-size: 18px; }.pancake-view { top: 118px; left: 8px; right: 8px; bottom: 38px; border-radius: 0 0 16px 16px; }.webview-state.loading, .webview-state.error { top: 190px; }.mini-rail { top: auto; right: 8px; bottom: 52px; width: 58px; height: 270px; padding: 8px 4px; border-radius: 20px; }.mini-btn { width: 50px; height: 48px; }.bot-status-card { left: 12px; bottom: 52px; min-width: 190px; height: 72px; }.bottom-status-bar { left: 8px; right: 76px; bottom: 6px; height: 38px; min-height: 38px; padding: 6px 10px; overflow: hidden; white-space: nowrap; } }
+@media (prefers-reduced-motion: reduce) { .spinner, .control-panel.open, .tab-panel.active { animation: none; }.btn, .tab, .browser-tab, .mini-btn { transition: none; } }
+
+/* Compact shell: maximize the Pancake surface without hiding controls. */
+.top-toolbar { top: 10px; left: 12px; right: 12px; height: 64px; padding: 8px 12px; border-radius: 18px; gap: 8px; }
+.toolbar-identity { flex-basis: 160px; gap: 8px; }
+.toolbar-mark { width: 38px; height: 38px; font-size: 17px; }
+.toolbar-app-name { font-size: 14px; }
+.toolbar-app-name::after { margin-top: 2px; font-size: 10px; }
+.browser-tab { min-width: 76px; height: 42px; padding: 0 14px; font-size: 13px; }
+.toolbar-navigation { min-width: 180px; height: 42px; }
+.toolbar-navigation .url-input { height: 38px; font-size: 13px; }
+.toolbar-navigation .btn.small { width: 32px; height: 32px; }
+.operator-chip, .toolbar-settings, .toolbar-sign-in { height: 42px; padding: 0 16px; font-size: 13px; }
+.toolbar-sign-in { min-width: 96px; }
+.webview-surface-header { top: 86px; left: 12px; right: 12px; height: 36px; padding: 0 16px; border-radius: 18px 18px 0 0; }
+.surface-status { padding: 6px 14px; font-size: 10px; }
+.pancake-shell-header { top: 122px; left: 20px; right: 20px; height: 48px; padding: 0 28px; border-radius: 14px; font-size: 18px; }
+.pancake-view { top: 122px; left: 12px; right: 12px; bottom: 20px; border-radius: 0 0 18px 18px; }
+.webview-state.loading, .webview-state.error { top: 204px; }
+.mini-rail { top: 184px; right: 16px; width: 68px; height: 328px; padding: 10px 6px; gap: 4px; border-radius: 22px; }
+.mini-btn { width: 54px; height: 56px; gap: 4px; border-radius: 14px; }
+.mini-label { font-size: 9px; }
+.bot-status-card { left: 24px; bottom: 56px; min-width: 220px; height: 76px; padding: 12px 16px; border-radius: 14px; }
+.bot-status-card::before { top: 12px; left: 16px; }
+.bot-status-card > div { gap: 12px; margin-top: 20px; }
+.bot-status-card > div span { padding: 6px 14px; }
+.bottom-status-bar { left: 268px; right: 104px; bottom: 8px; height: 38px; min-height: 38px; padding: 6px 14px; gap: 8px; border-radius: 19px; font-size: 11px; }
+@media (max-width: 1280px) {
+  .top-toolbar { left: 8px; right: 8px; gap: 6px; }
+  .toolbar-identity { flex-basis: 136px; }
+  .browser-tab { min-width: 66px; padding: 0 10px; }
+  .toolbar-navigation { min-width: 150px; }
+  .toolbar-sign-in { min-width: 82px; padding: 0 12px; }
+  .toolbar-settings { padding: 0 12px; }
+  .mini-rail { right: 10px; }
+  .bottom-status-bar { left: 220px; right: 88px; }
+}
+
+/* Final compact pass: preserve WebView width and prevent toolbar clipping. */
+.top-toolbar { height: 54px; top: 8px; left: 8px; right: 8px; padding: 6px 10px; gap: 6px; border-radius: 16px; }
+.toolbar-identity { flex-basis: 132px; gap: 6px; }
+.toolbar-mark { width: 34px; height: 34px; font-size: 16px; }
+.toolbar-app-name { font-size: 13px; }
+.toolbar-app-name::after { font-size: 9px; }
+.browser-tabs-bar { gap: 4px; }
+.browser-tab { min-width: 64px; height: 36px; padding: 0 10px; font-size: 12px; }
+.toolbar-navigation { height: 36px; min-width: 150px; gap: 5px; padding: 0 7px; }
+.toolbar-navigation .url-input { height: 32px; font-size: 12px; }
+.toolbar-navigation .btn.small { width: 28px; height: 28px; }
+.operator-chip, .toolbar-settings, .toolbar-sign-in { height: 36px; padding: 0 12px; border: 1px solid var(--chrome-border); background: #fff; color: #171c29; font-size: 12px; }
+.toolbar-sign-in { min-width: 78px; font-weight: 700; }
+.toolbar-settings { min-width: 76px; font-weight: 600; }
+.toolbar-sign-in:hover, .toolbar-settings:hover { background: #f6f7fa; color: #171c29; }
+.bot-status-card { left: 16px; bottom: 48px; min-width: 164px; width: 164px; height: 56px; padding: 8px 12px; border-radius: 12px; }
+.bot-status-card::before { top: 8px; left: 12px; font-size: 9px; }
+.bot-status-card > div { gap: 8px; margin-top: 16px; }
+.bot-status-card > div strong { font-size: 12px; }
+.bot-status-card > div span { padding: 5px 10px; font-size: 10px; }
+.status-card-dot { width: 7px; height: 7px; }
+.webview-surface-header { top: 68px; }
+.pancake-view { top: 104px; }
+.webview-state.loading, .webview-state.error { top: 182px; }
+.bottom-status-bar { left: 8px; right: 8px; bottom: 4px; height: 34px; min-height: 34px; padding: 4px 10px; gap: 8px; border-radius: 17px; font-size: 10px; }
+.bottom-status-bar::before { content: none; }
+.bottom-status-bar .shortcut-dock-btn { min-width: 32px; height: 26px; padding: 0 8px; }
+
+/* --- Update Toast (electron-updater) --- */
+.update-toast {
+  position: fixed;
+  bottom: 24px;
+  right: 64px;
+  z-index: 9999;
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-md);
+  padding: 12px 16px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 280px;
+  max-width: 380px;
+  animation: slideInUp 0.2s ease-out;
+}
+.update-toast.hidden { display: none; }
+.update-toast-content { flex: 1; min-width: 0; }
+.update-toast-title { font-weight: 600; font-size: 13px; color: var(--text); margin-bottom: 2px; }
+.update-toast-msg { font-size: 12px; color: var(--muted); }
+.update-progress-wrap { height: 4px; background: var(--line); border-radius: 2px; margin-top: 6px; overflow: hidden; }
+.update-progress-wrap.hidden { display: none; }
+.update-progress-bar { height: 100%; background: var(--green); transition: width 0.3s ease; }
+.update-toast-actions { display: flex; align-items: center; gap: 6px; }
+@keyframes slideInUp {
+  from { transform: translateY(12px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}

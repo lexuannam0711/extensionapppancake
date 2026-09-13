@@ -14,17 +14,20 @@ create table if not exists public.devices (
   device_id text not null unique,
   user_id uuid not null references public.profiles(id) on delete cascade,
   os text not null,
-  channel text not null check (channel in ('modern', 'win7')),
+  channel text not null check (channel = 'modern'),
   app_version text not null,
   online boolean not null default false,
   last_seen_at timestamptz not null default now(),
   last_update_status text not null default 'unknown',
   updater_error text not null default '',
   device_token_hash text not null default '',
+  metadata jsonb not null default '{}'::jsonb,
   revoked boolean not null default false,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+alter table public.devices drop constraint if exists devices_channel_check;
+alter table public.devices add constraint devices_channel_check check (channel = 'modern');
 
 create table if not exists public.audit_events (
   id uuid primary key default gen_random_uuid(),

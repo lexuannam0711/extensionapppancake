@@ -1,4 +1,4 @@
-const CHANNELS = new Set(['modern', 'win7']);
+const CHANNELS = new Set(['modern']);
 const VERSION_PATTERN = /^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/;
 const MANIFEST_FIELDS = ['version', 'channel', 'minSupportedVersion', 'artifactUrl', 'sha256', 'releaseNotes'];
 

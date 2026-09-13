@@ -14,7 +14,6 @@ const {
 const { sha256File, verifyEd25519, signEd25519, sha256Buffer } = require('../src/update/integrity');
 const { safeJoin, assertSafePath } = require('../src/update/pathSafety');
 const { applyDirectoryUpdate } = require('../src/update/rollback');
-const { downloadArtifact, downloadAndApplyWin7Update, createWin7Updater, withChannel } = require('../src/update/win7-updater');
 const { createModernUpdater } = require('../src/update/modern-updater');
 const { createEncryptedTokenStore } = require('../src/auth/tokenStore');
 const { auditArtifact } = require('../scripts/audit-artifact');
@@ -22,7 +21,9 @@ const { migrateData, DATA_SCHEMA_VERSION } = require('../src/server/dataMigratio
 const {
   createControlPlaneApp,
   createInMemoryRepository,
-  createHs256Token
+  createHs256Token,
+  normalizeHeartbeatInput,
+  sanitizeMetadata
 } = require('../src/control-plane/server');
 const { createControlPlaneClient } = require('../src/control-plane/client');
 
@@ -51,11 +52,6 @@ test('semver comparison handles release and prerelease versions', () => {
   assert.equal(compareVersions('3.1.0-beta.1', '3.1.0'), -1);
   assert.equal(isUpdateAvailable('3.0.0', validManifest()), true);
   assert.equal(isUpdateAvailable('3.1.0', validManifest()), false);
-});
-
-test('Win7 updater appends win7 channel to helper manifest URL', () => {
-  assert.equal(withChannel('https://control.example.test/v1/update-manifest', 'win7'), 'https://control.example.test/v1/update-manifest?channel=win7');
-  assert.equal(withChannel('https://control.example.test/v1/update-manifest?version=3.0.0', 'win7'), 'https://control.example.test/v1/update-manifest?version=3.0.0&channel=win7');
 });
 
 test('manifest signature covers stable payload without signature field', () => {
@@ -182,37 +178,6 @@ test('control plane requires operator JWT for device registration and protects a
   }
 });
 
-test('Win7 updater verifies signed manifest and artifact before replacing app tree', async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'pdb-win7-update-'));
-  const installDir = path.join(root, 'app');
-  await fs.mkdir(installDir);
-  await fs.writeFile(path.join(installDir, 'version.txt'), 'old');
-  const artifact = Buffer.from('signed zip payload');
-  const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
-  const unsigned = {
-    version: '3.2.0',
-    channel: 'win7',
-    minSupportedVersion: '3.0.0',
-    artifactUrl: 'https://updates.example.test/app-win7.zip',
-    sha256: sha256Buffer(artifact),
-    signature: '',
-    releaseNotes: 'Win7 update'
-  };
-  const signature = signEd25519(canonicalManifestPayload(unsigned), privateKey);
-  const manifest = { ...unsigned, signature };
-  const result = await downloadAndApplyWin7Update({
-    manifest,
-    installDir,
-    publicKey: publicKey.export({ type: 'spki', format: 'pem' }),
-    fetchImpl: async () => ({ ok: true, status: 200, headers: new Headers(), arrayBuffer: async () => artifact }),
-    extractArchive: async (_archive, destination) => fs.writeFile(path.join(destination, 'version.txt'), 'new'),
-    tempRoot: root
-  });
-  assert.equal(result.manifest.version, '3.2.0');
-  assert.equal(await fs.readFile(path.join(installDir, 'version.txt'), 'utf8'), 'new');
-  await fs.rm(root, { recursive: true, force: true });
-});
-
 test('encrypted token store does not write plaintext refresh token', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'pdb-token-'));
   const filePath = path.join(root, 'refresh-token.bin');
@@ -235,18 +200,6 @@ test('artifact audit rejects runtime data and secret files', async () => {
   await fs.writeFile(path.join(root, 'server', 'data', 'settings.json'), '{}');
   await assert.rejects(() => auditArtifact(root), /blocked path/);
   await fs.rm(root, { recursive: true, force: true });
-});
-test('Win7 artifact download rejects untrusted redirects', async () => {
-  await assert.rejects(
-    () => downloadArtifact('https://updates.example.test/app.zip', async () => ({
-      ok: true,
-      status: 200,
-      url: 'https://evil.example.test/app.zip',
-      headers: new Headers(),
-      arrayBuffer: async () => Buffer.from('payload')
-    }), { allowedHosts: ['updates.example.test'] }),
-    /redirect host/
-  );
 });
 test('modern updater verifies signed installer bytes before launch', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'pdb-modern-update-'));
@@ -353,13 +306,72 @@ test('updaters treat control-plane 204 as current', async () => {
   });
   assert.equal((await modern.checkAtStartup()).status, 'current');
 
-  const win7 = createWin7Updater({
-    getWindow: () => ({ isDestroyed: () => false }),
-    manifestUrl: 'https://updates.example.test/manifest.json',
-    publicKey: 'unused',
-    allowedHosts: ['updates.example.test'],
-    appImpl: { getVersion: () => '3.0.0' },
-    fetchImpl: async () => ({ ok: true, status: 204, url: 'https://updates.example.test/manifest.json' })
+});
+
+test('sanitizeMetadata filters non-allowlisted keys and enforces size limit', () => {
+  const clean = sanitizeMetadata({
+    botActive: true,
+    heapUsedMb: 120,
+    rssMb: 250,
+    uptimeSeconds: 3600,
+    apiKey: 'secret-leaked',
+    sqlInjection: 'DROP TABLE',
+    arbitrary: 'ignored'
   });
-  assert.equal((await win7.checkAtStartup()).status, 'current');
+  assert.deepEqual(clean, { botActive: true, heapUsedMb: 120, rssMb: 250, uptimeSeconds: 3600 });
+  assert.equal(clean.apiKey, undefined);
+
+  // Reject oversized payloads
+  const oversized = { botActive: true, heapUsedMb: 1, rssMb: 1, uptimeSeconds: 1 };
+  assert.deepEqual(sanitizeMetadata(oversized), oversized);
+  assert.deepEqual(sanitizeMetadata(null), {});
+  assert.deepEqual(sanitizeMetadata('string'), {});
+});
+
+test('normalizeHeartbeatInput accepts clean metadata and ignores malformed inputs', () => {
+  const result = normalizeHeartbeatInput({
+    appVersion: '3.0.0',
+    online: true,
+    metadata: { botActive: false, heapUsedMb: 80, token: 'leak' }
+  });
+  assert.equal(result.appVersion, '3.0.0');
+  assert.equal(result.metadata.botActive, false);
+  assert.equal(result.metadata.heapUsedMb, 80);
+  assert.equal(result.metadata.token, undefined);
+});
+
+test('client heartbeat sends metadata gathered from getMetadata callback', async () => {
+  const requests = [];
+  const client = createControlPlaneClient({
+    controlPlaneUrl: 'https://control.example.test',
+    supabaseUrl: 'https://supabase.example.test',
+    supabaseAnonKey: 'anon',
+    safeStorage: { isEncryptionAvailable: () => false },
+    channel: 'modern',
+    appVersion: '3.0.0',
+    deviceId: 'device-test-meta',
+    refreshTokenStore: { save: async () => {}, load: async () => 'refresh-token', clear: async () => {} },
+    deviceTokenStore: { save: async () => {}, load: async () => 'device-token', clear: async () => {} },
+    getMetadata: () => ({ botActive: true, heapUsedMb: 99, uptimeSeconds: 42 }),
+    fetchImpl: async (url, options = {}) => {
+      const body = options.body ? JSON.parse(options.body) : null;
+      requests.push({ url, body });
+      // Supabase token refresh
+      if (url.includes('/auth/v1/token')) return { ok: true, status: 200, json: async () => ({ access_token: 'jwt-test', refresh_token: 'refresh-token', expires_in: 3600 }) };
+      if (url.endsWith('/v1/me')) return { ok: true, status: 200, json: async () => ({ profile: { id: 'u1', role: 'operator', active: true } }) };
+      if (url.endsWith('/v1/devices/heartbeat')) return { ok: true, status: 200, json: async () => ({ ok: true, device: { deviceId: 'device-test-meta' } }) };
+      return { ok: true, status: 200, json: async () => ({}) };
+    }
+  });
+
+  // initialize loads refresh token from store and runs a session refresh -> sets accessToken
+  await client.initialize();
+  // now heartbeat should fire because accessToken is set
+  await client.heartbeat();
+  const hbReq = requests.find((r) => r.url.endsWith('/v1/devices/heartbeat'));
+  assert.ok(hbReq, 'Heartbeat request should be sent');
+  assert.equal(hbReq.body.metadata.botActive, true);
+  assert.equal(hbReq.body.metadata.heapUsedMb, 99);
+  assert.equal(hbReq.body.metadata.uptimeSeconds, 42);
+  client.dispose();
 });

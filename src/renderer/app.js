@@ -53,7 +53,11 @@ function createBotRuntime(tabId) {
     autoClickLoopPromise: null,
     autoClickProcessed: new Map(),
     automationTransientErrorStreak: 0,
-    autoClickTransientErrorStreak: 0
+    autoClickTransientErrorStreak: 0,
+    autoReplyPreviewRunning: false,
+    autoReplyPreviewStopping: false,
+    autoReplyPreviewLoopPromise: null,
+    autoReplyPreviewState: 'idle'
   };
 }
 
@@ -73,6 +77,9 @@ let botRunning = false;
 let botLoopPromise = null;
 let autoClickRunning = false;
 let autoClickLoopPromise = null;
+const AUTO_REPLY_PREVIEW_STORAGE_KEY = 'pdb-auto-reply-preview-settings';
+let autoReplyPreviewCode = '';
+let autoReplyPreviewStartLock = false;
 
 // --- Trợ lý gợi ý real-time (suggest-only, độc lập botLoop) ---
 let assistantEnabled = false;   // Công_Tắc_Trợ_Lý, mặc định TẮT (Req 4.2)
@@ -146,8 +153,12 @@ function anyRuntimeAutoClickRunning() {
   return Object.values(webviewTabs).some((tab) => Boolean(tab.runtime?.autoClickRunning));
 }
 
+function anyRuntimeAutoReplyPreviewRunning() {
+  return Object.values(webviewTabs).some((tab) => Boolean(tab.runtime?.autoReplyPreviewRunning || tab.runtime?.autoReplyPreviewStopping));
+}
+
 function isRuntimeAutomationActive(runtime) {
-  return Boolean(runtime?.botRunning || runtime?.autoClickRunning);
+  return Boolean(runtime?.botRunning || runtime?.autoClickRunning || runtime?.autoReplyPreviewRunning || runtime?.autoReplyPreviewStopping);
 }
 
 function anyRuntimeAutomationActive() {
@@ -250,6 +261,7 @@ function renderControlPlaneStatus(next = {}) {
   if ($('accountEmail')) $('accountEmail').disabled = signedIn || next.status === 'signing_in';
   if ($('accountPassword')) $('accountPassword').disabled = signedIn || next.status === 'signing_in';
   if ($('authStatus')) $('authStatus').textContent = next.error ? `${next.status}: ${next.error}` : next.status;
+  if ($('authStatusCompact')) $('authStatusCompact').textContent = next.error ? 'Error' : (next.status || 'Offline');
 }
 
 async function loadControlPlaneStatus() {
@@ -556,6 +568,17 @@ async function loadAutomationAdapterCode() {
   return automationAdapterCode;
 }
 
+async function loadAutoReplyPreviewCode() {
+  if (!autoReplyPreviewCode) autoReplyPreviewCode = await fetch('autoReplyPreview.js').then((response) => response.text());
+  return autoReplyPreviewCode;
+}
+
+async function previewCall(tabId, expression, label) {
+  const code = await loadAutoReplyPreviewCode();
+  const ensure = `if (!window.PDBAutoReplyPreviewController) { ${code} }`;
+  return executeInTab(tabId, `${ensure}\n${expression}`, label);
+}
+
 async function injectAutomation(tabId = activeWvTab) {
   const tab = getTab(tabId);
   if (!tab.botCapable) throw new Error('Tab này không hỗ trợ bot');
@@ -677,6 +700,7 @@ async function loadSettings() {
   $('buyTag').value = settings.buyTagName || 'Mua hàng';
   $('minConfidence').value = settings.minConfidence || 0.75;
   if ($('autoClickDelayMs')) $('autoClickDelayMs').value = settings.autoClickDelayMs || 3000;
+  renderAutoReplyPreviewSettings();
   refreshActiveTabRuntimeUi();
 }
 
@@ -1775,6 +1799,7 @@ let panelPos = null; // { left, top } px — vị trí gần nhất
 function openPanel() {
   const p = document.querySelector('.control-panel');
   p.classList.add('open');
+  if ($('panelBackdrop')) $('panelBackdrop').hidden = false;
   if (panelPos) {
     // Kẹp lại trong viewport phòng khi cửa sổ app đã thu nhỏ từ lần kéo trước.
     const w = p.offsetWidth || 0;
@@ -1789,7 +1814,9 @@ function openPanel() {
 
 function closePanel() {
   document.querySelector('.control-panel').classList.remove('open');
+  if ($('panelBackdrop')) $('panelBackdrop').hidden = true;
   if ($('miniRail')) $('miniRail').classList.remove('hidden');
+  if ($('settingsBtn')) $('settingsBtn').focus();
 }
 
 // Kéo cửa sổ nổi bằng thanh tiêu đề; kẹp trong viewport; lưu vị trí.
@@ -1850,7 +1877,7 @@ function setBotUiState(running = Boolean(getActiveBotRuntime()?.botRunning)) {
 function refreshBrowserTabBadges() {
   document.querySelectorAll('.browser-tab').forEach((btn) => {
     const runtime = getTab(btn.dataset.wvtab).runtime;
-    btn.classList.toggle('running', Boolean(runtime?.botRunning || runtime?.autoClickRunning));
+    btn.classList.toggle('running', Boolean(runtime?.botRunning || runtime?.autoClickRunning || runtime?.autoReplyPreviewRunning));
   });
 }
 
@@ -1860,19 +1887,28 @@ function refreshActiveTabRuntimeUi() {
   syncLegacyRuntimeAliases(runtime || webviewTabs.bot1.runtime);
   const botOn = Boolean(runtime?.botRunning);
   const autoOn = Boolean(runtime?.autoClickRunning);
+  const previewOn = Boolean(runtime?.autoReplyPreviewRunning || runtime?.autoReplyPreviewStopping);
   setBotUiState(botOn);
   setAutoClickUiState(autoOn);
+  setAutoReplyPreviewUiState(previewOn);
   if ($('activeTabBotStatus')) {
     $('activeTabBotStatus').textContent = tab.botCapable
-      ? `${tab.label}: ${botOn ? 'Bot running' : autoOn ? 'AutoClick running' : 'Stopped'}`
+      ? `${tab.label}: ${botOn ? 'Bot running' : autoOn ? 'AutoClick running' : previewOn ? 'Preview Reply running' : 'Stopped'}`
       : `${tab.label}: thủ công`;
   }
-  if ($('startBotBtn')) $('startBotBtn').disabled = !tab.botCapable || botOn || autoOn;
+  const floatingStatus = tab.botCapable ? (botOn ? 'Running' : autoOn ? 'Auto Click' : previewOn ? 'Preview Reply' : 'Ready') : 'Manual';
+  if ($('floatingBotLabel')) $('floatingBotLabel').textContent = tab.label;
+  if ($('floatingBotStatus')) $('floatingBotStatus').textContent = floatingStatus;
+  if ($('bottomBotStatus')) $('bottomBotStatus').textContent = floatingStatus;
+  if ($('startBotBtn')) $('startBotBtn').disabled = !tab.botCapable || botOn || autoOn || previewOn;
   if ($('stopBotBtn')) $('stopBotBtn').disabled = !tab.botCapable || !botOn;
-  if ($('startAutoClickBtn')) $('startAutoClickBtn').disabled = !tab.botCapable || botOn;
+  if ($('startAutoClickBtn')) $('startAutoClickBtn').disabled = !tab.botCapable || botOn || previewOn;
+  if ($('startAutoReplyPreviewBtn')) $('startAutoReplyPreviewBtn').disabled = !tab.botCapable || botOn || autoOn || previewOn;
+  if ($('stopAutoReplyPreviewBtn')) $('stopAutoReplyPreviewBtn').disabled = !tab.botCapable || !previewOn;
+  if ($('autoReplyPreviewStatus')) $('autoReplyPreviewStatus').textContent = runtime?.autoReplyPreviewState || 'idle';
   if ($('stopAutoClickBtn')) $('stopAutoClickBtn').disabled = !tab.botCapable;
   setRuntimeState(tab.botCapable
-    ? `${tab.label}: ${botOn ? 'Bot running' : autoOn ? 'AutoClick running' : 'Stopped'}`
+    ? `${tab.label}: ${botOn ? 'Bot running' : autoOn ? 'AutoClick running' : previewOn ? 'Preview Reply running' : 'Stopped'}`
     : `${tab.label}: Manual`);
   refreshBrowserTabBadges();
 }
@@ -1888,6 +1924,11 @@ async function startBot(runtime = getActiveBotRuntime()) {
   }
   if (runtime.autoClickRunning) {                             // Req 2.3, 2.4, 9.1
     toast('Auto Click đang chạy trong tab này — hãy dừng Auto Click trước.', 5000);
+    refreshActiveTabRuntimeUi();
+    return;
+  }
+  if (anyRuntimeAutoReplyPreviewRunning()) {
+    toast('Auto Reply Preview đang chạy — hãy dừng trước.', 5000);
     refreshActiveTabRuntimeUi();
     return;
   }
@@ -2008,6 +2049,11 @@ async function startAutoClick(runtime = getActiveBotRuntime()) {
     refreshActiveTabRuntimeUi();
     return;
   }
+  if (anyRuntimeAutoReplyPreviewRunning()) {
+    toast('Auto Reply Preview đang chạy — hãy dừng trước.', 5000);
+    refreshActiveTabRuntimeUi();
+    return;
+  }
   if ($('autoClickEnabled')) $('autoClickEnabled').checked = true;
   await saveSettingsFromUi();
   if (!runtime.autoClickLoopPromise) {
@@ -2031,11 +2077,144 @@ async function stopAutoClick(runtime = getActiveBotRuntime()) {
   refreshActiveTabRuntimeUi();
 }
 
+function setAutoReplyPreviewUiState(running = Boolean(getActiveBotRuntime()?.autoReplyPreviewRunning)) {
+  const activeTab = getTab(activeWvTab);
+  const btn = $('miniAutoReplyPreviewBtn');
+  if (!btn) return;
+  btn.classList.toggle('on', running);
+  btn.disabled = !activeTab.botCapable;
+  btn.innerHTML = `<span class="mini-dot"></span><span>${window.PDBIcons ? window.PDBIcons.svg(running ? 'pause' : 'message') : (running ? '⏸' : '▢')}</span><span class="mini-label">Comment</span>`;
+}
+
+function readAutoReplyPreviewSettings() {
+  const fallback = window.PDBAutoReplyPreview.DEFAULTS;
+  try { return window.PDBAutoReplyPreview.normalizeSettings(JSON.parse(localStorage.getItem(AUTO_REPLY_PREVIEW_STORAGE_KEY) || '{}')); }
+  catch (_) { return { ...fallback }; }
+}
+
+function autoReplyPreviewSettingsFromUi() {
+  return window.PDBAutoReplyPreview.normalizeSettings({
+    replyText: $('autoReplyPreviewShortcut').value,
+    waitAfterConversationClickMs: $('autoReplyPreviewWaitAfterClick').value,
+    waitBeforePreviewSendMs: $('autoReplyPreviewWaitBeforePreview').value,
+    waitBeforeOuterReplyMs: $('autoReplyPreviewWaitBeforeOuter').value,
+    loopDelayMs: $('autoReplyPreviewLoopDelay').value,
+    selectorTimeoutMs: $('autoReplyPreviewSelectorTimeout').value
+  });
+}
+
+function renderAutoReplyPreviewSettings(value = readAutoReplyPreviewSettings()) {
+  if (!$('autoReplyPreviewShortcut')) return;
+  $('autoReplyPreviewShortcut').value = value.replyText;
+  $('autoReplyPreviewWaitAfterClick').value = value.waitAfterConversationClickMs;
+  $('autoReplyPreviewWaitBeforePreview').value = value.waitBeforePreviewSendMs;
+  $('autoReplyPreviewWaitBeforeOuter').value = value.waitBeforeOuterReplyMs;
+  $('autoReplyPreviewLoopDelay').value = value.loopDelayMs;
+  $('autoReplyPreviewSelectorTimeout').value = value.selectorTimeoutMs;
+}
+
+function saveAutoReplyPreviewSettings() {
+  const value = autoReplyPreviewSettingsFromUi();
+  localStorage.setItem(AUTO_REPLY_PREVIEW_STORAGE_KEY, JSON.stringify(value));
+  renderAutoReplyPreviewSettings(value);
+  toast('Đã lưu thông số Preview Reply');
+}
+
+async function autoReplyPreviewLoop(runtime, settingsValue) {
+  runtime.autoReplyPreviewRunning = true;
+  runtime.autoReplyPreviewState = 'running';
+  refreshActiveTabRuntimeUi();
+  try {
+    await previewCall(runtime.tabId, `window.PDBAutoReplyPreviewController.start(${JSON.stringify(settingsValue)})`, 'autoReplyPreviewStart');
+    while (runtime.autoReplyPreviewRunning) {
+      if (getTab(runtime.tabId).loadGeneration !== runtime.autoReplyPreviewGeneration) {
+        const error = new Error('Trang Pancake đã tải lại; Preview Reply đã dừng');
+        error.code = 'PREVIEW_SEND_UNVERIFIED';
+        throw error;
+      }
+      const status = await previewCall(runtime.tabId, 'window.PDBAutoReplyPreviewController.getStatus()', 'autoReplyPreviewStatus');
+      runtime.autoReplyPreviewState = status?.state || status?.phase || 'running';
+      if ($('autoReplyPreviewProgress')) $('autoReplyPreviewProgress').textContent = `Phase: ${status?.phase || 'running'} | Đã xử lý: ${status?.processedCount || 0} | Thử: ${status?.attemptedCount || 0}`;
+      if (status?.lastErrorCode && $('autoReplyPreviewError')) { $('autoReplyPreviewError').hidden = false; $('autoReplyPreviewError').textContent = `${status.lastErrorCode}: ${status.lastError}`; }
+      if (status?.state === 'failed' || status?.state === 'stopped') break;
+      await sleep(500);
+    }
+  } catch (error) {
+    runtime.autoReplyPreviewState = 'failed';
+    if ($('autoReplyPreviewError')) { $('autoReplyPreviewError').hidden = false; $('autoReplyPreviewError').textContent = String(error.message || error); }
+    toast(`Preview Reply lỗi: ${error.message}`, 5000);
+  } finally {
+    runtime.autoReplyPreviewRunning = false;
+    runtime.autoReplyPreviewLoopPromise = null;
+    updateAutomationActivity();
+    refreshActiveTabRuntimeUi();
+  }
+}
+
+async function startAutoReplyPreview(runtime = getActiveBotRuntime()) {
+  if (!runtime) { toast('Tab này không hỗ trợ Preview Reply', 4000); return; }
+  if (autoReplyPreviewStartLock || anyRuntimeBotRunning() || anyRuntimeAutoClickRunning() || anyRuntimeAutoReplyPreviewRunning()) {
+    toast('Đang có automation khác chạy — hãy dừng trước.', 5000);
+    return;
+  }
+  autoReplyPreviewStartLock = true;
+  runtime.autoReplyPreviewRunning = true;
+  runtime.autoReplyPreviewGeneration = getTab(runtime.tabId).loadGeneration;
+  runtime.autoReplyPreviewState = 'starting';
+  updateAutomationActivity();
+  refreshActiveTabRuntimeUi();
+  runtime.autoReplyPreviewLoopPromise = (async () => {
+    try {
+      await ensureBotChatPage(runtime);
+      if (!runtime.autoReplyPreviewRunning || runtime.autoReplyPreviewStopping) return;
+      const settingsValue = autoReplyPreviewSettingsFromUi();
+      if ($('autoReplyPreviewError')) $('autoReplyPreviewError').hidden = true;
+      await autoReplyPreviewLoop(runtime, settingsValue);
+    } catch (error) {
+      runtime.autoReplyPreviewState = 'failed';
+      if ($('autoReplyPreviewError')) { $('autoReplyPreviewError').hidden = false; $('autoReplyPreviewError').textContent = String(error.message || error); }
+      toast(`Preview Reply lỗi: ${error.message}`, 5000);
+    }
+  })().finally(() => {
+    runtime.autoReplyPreviewLoopPromise = null;
+    runtime.autoReplyPreviewRunning = false;
+    runtime.autoReplyPreviewStopping = false;
+    autoReplyPreviewStartLock = false;
+    updateAutomationActivity();
+    refreshActiveTabRuntimeUi();
+  });
+}
+
+async function stopAutoReplyPreview(runtime = getActiveBotRuntime()) {
+  if (!runtime) return;
+  const loopPromise = runtime.autoReplyPreviewLoopPromise;
+  if (runtime.autoReplyPreviewRunning) {
+    runtime.autoReplyPreviewState = 'stopping';
+    runtime.autoReplyPreviewStopping = true;
+    runtime.autoReplyPreviewRunning = false;
+    refreshActiveTabRuntimeUi();
+    void previewCall(runtime.tabId, 'window.PDBAutoReplyPreviewController.stop()', 'autoReplyPreviewStop').catch(() => {});
+  }
+  if (loopPromise) await loopPromise.catch(() => {});
+  runtime.autoReplyPreviewRunning = false;
+  runtime.autoReplyPreviewStopping = false;
+  autoReplyPreviewStartLock = false;
+  updateAutomationActivity();
+  refreshActiveTabRuntimeUi();
+}
+
 async function toggleAutoClickFromRail() {
   const runtime = getActiveBotRuntime();
   if (!runtime) { toast('Tab này không hỗ trợ Auto Click', 4000); return; }
   if (runtime.autoClickRunning) await stopAutoClick(runtime);
   else await startAutoClick(runtime);
+}
+
+async function toggleAutoReplyPreviewFromRail() {
+  const runtime = getActiveBotRuntime();
+  if (!runtime) { toast('Tab này không hỗ trợ Preview Reply', 4000); return; }
+  if (runtime.autoReplyPreviewRunning || runtime.autoReplyPreviewStopping) await stopAutoReplyPreview(runtime);
+  else await startAutoReplyPreview(runtime);
 }
 
 function openPanelTab(tabId) {
@@ -2267,16 +2446,45 @@ function enableDragScroll(el) {
 }
 
 function bindUi() {
+  const webviewStatus = $('webviewStatus');
+  const bottomWebviewStatus = $('bottomWebviewStatus');
+  const connectionStatus = $('webviewConnectionStatus');
+  const loadingState = $('webviewLoading');
+  const errorState = $('webviewError');
+  const syncShellWebviewState = () => {
+    const text = webviewStatus?.textContent || '';
+    const loading = /Ä‘ang táº£i|connecting|loading|khÃ´i phá»¥c/i.test(text);
+    const failed = /lá»—i|failed|error|khÃ´ng thá»ƒ|chÆ°a thá»ƒ/i.test(text);
+    const connected = !loading && !failed && /loaded|ready|Ä‘Ã£ Ä‘Äƒng nháº­p|connected/i.test(text);
+    if (bottomWebviewStatus) bottomWebviewStatus.textContent = text || (loading ? 'Loading' : 'WebView');
+    if (connectionStatus) {
+      connectionStatus.textContent = loading ? 'Loading' : failed ? 'Error' : connected ? 'Connected' : 'Connecting';
+      connectionStatus.className = `surface-status ${loading ? 'loading' : failed ? 'error' : connected ? 'connected' : 'connecting'}`;
+    }
+    if (loadingState) loadingState.hidden = !loading;
+    if (errorState) errorState.hidden = !failed;
+  };
+  if (webviewStatus && bottomWebviewStatus) {
+    new MutationObserver(syncShellWebviewState).observe(webviewStatus, { childList: true, characterData: true, subtree: true });
+    syncShellWebviewState();
+  }
   // Panel toggle + mini rail
   $('panelCloseBtn').addEventListener('click', closePanel);
   if ($('panelMinBtn')) $('panelMinBtn').addEventListener('click', closePanel);
   enablePanelDrag();
   if ($('miniPanelBtn')) $('miniPanelBtn').addEventListener('click', openPanel);
+  if ($('panelBackdrop')) $('panelBackdrop').addEventListener('click', closePanel);
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && document.querySelector('.control-panel.open')) closePanel();
+  });
   if ($('miniBotBtn')) $('miniBotBtn').addEventListener('click', async () => {
     try { await toggleBotFromRail(); } catch (e) { toast(e.message, 5000); }
   });
   if ($('miniAutoClickBtn')) $('miniAutoClickBtn').addEventListener('click', async () => {
     try { await toggleAutoClickFromRail(); } catch (e) { toast(e.message, 5000); }
+  });
+  if ($('miniAutoReplyPreviewBtn')) $('miniAutoReplyPreviewBtn').addEventListener('click', async () => {
+    try { await toggleAutoReplyPreviewFromRail(); } catch (e) { toast(e.message, 5000); }
   });
   if ($('miniQueueBtn')) $('miniQueueBtn').addEventListener('click', () => openPanelTab('reviewQueuePanel'));
   if ($('miniSuggestBtn')) $('miniSuggestBtn').addEventListener('click', () => openPanelTab('ai'));
@@ -2309,6 +2517,16 @@ function bindUi() {
   if ($('pancakeLoginBtn')) $('pancakeLoginBtn').addEventListener('click', () => {
     openLoginInTab(getTab(activeWvTab), { force: true });
   });
+  if ($('settingsBtn')) $('settingsBtn').addEventListener('click', () => openPanelTab('bot'));
+  if ($('retryWebviewBtn')) $('retryWebviewBtn').addEventListener('click', async () => {
+    try { await reloadActiveWebview(); } catch (e) { toast(e.message, 5000); }
+  });
+  document.querySelectorAll('.shortcut-dock-btn').forEach((button) => {
+    button.addEventListener('click', async () => {
+      try { await fillShortcut(button.dataset.shortcut); }
+      catch (e) { toast(e.message, 5000); }
+    });
+  });
   if ($('authLoginBtn')) $('authLoginBtn').addEventListener('click', signInOperator);
   if ($('authLogoutBtn')) $('authLogoutBtn').addEventListener('click', signOutOperator);
   $('saveSettingsBtn').addEventListener('click', saveSettingsFromUi);
@@ -2329,6 +2547,15 @@ function bindUi() {
   });
   if ($('stopAutoClickBtn')) $('stopAutoClickBtn').addEventListener('click', async () => {
     try { await stopAutoClick(); } catch (e) { toast(e.message, 5000); }
+  });
+  if ($('saveAutoReplyPreviewBtn')) $('saveAutoReplyPreviewBtn').addEventListener('click', () => {
+    try { saveAutoReplyPreviewSettings(); } catch (e) { toast(e.message, 5000); }
+  });
+  if ($('startAutoReplyPreviewBtn')) $('startAutoReplyPreviewBtn').addEventListener('click', async () => {
+    try { await startAutoReplyPreview(); } catch (e) { toast(e.message, 5000); }
+  });
+  if ($('stopAutoReplyPreviewBtn')) $('stopAutoReplyPreviewBtn').addEventListener('click', async () => {
+    try { await stopAutoReplyPreview(); } catch (e) { toast(e.message, 5000); }
   });
   if ($('autoClickEnabled')) $('autoClickEnabled').addEventListener('change', async (e) => {
     try { if (e.target.checked) await startAutoClick(); else await stopAutoClick(); }
@@ -2585,7 +2812,56 @@ function applyVisibility(state) {
   }
 }
 
+// --- electron-updater toast notification ---
+function initUpdaterToast() {
+  if (!window.pancakeDesktop?.onUpdateState) return;
+  const toast = document.getElementById('updateToast');
+  const msg = document.getElementById('updateToastMsg');
+  const progressWrap = document.getElementById('updateProgressWrap');
+  const progressBar = document.getElementById('updateProgressBar');
+  const installBtn = document.getElementById('updateInstallBtn');
+  const dismissBtn = document.getElementById('updateDismissBtn');
+  if (!toast || !msg) return;
+
+  function show(message, showInstall = false, showProgress = false) {
+    msg.textContent = message;
+    toast.classList.remove('hidden');
+    progressWrap.classList.toggle('hidden', !showProgress);
+    installBtn.classList.toggle('hidden', !showInstall);
+  }
+
+  dismissBtn?.addEventListener('click', () => toast.classList.add('hidden'));
+
+  installBtn?.addEventListener('click', () => {
+    window.pancakeDesktop.quitAndInstall?.();
+  });
+
+  window.pancakeDesktop.onUpdateAvailable?.((info) => {
+    show(`Bản cập nhật ${info?.version || 'mới'} đang tải xuống...`, false, true);
+  });
+
+  window.pancakeDesktop.onUpdateProgress?.((progress) => {
+    const pct = Math.round(progress?.percent ?? 0);
+    progressBar.style.width = `${pct}%`;
+    msg.textContent = `Đang tải bản cập nhật: ${pct}%`;
+  });
+
+  window.pancakeDesktop.onUpdateDownloaded?.((info) => {
+    progressBar.style.width = '100%';
+    show(`Bản ${info?.version || 'mới'} đã sẵn sàng cài đặt.`, true, false);
+  });
+
+  window.pancakeDesktop.onUpdateError?.((err) => {
+    if (err?.message && /trust configuration|not-configured/i.test(err.message)) return;
+    msg.textContent = `Lỗi cập nhật: ${err?.message || 'Không xác định'}`;
+    toast.classList.remove('hidden');
+    installBtn.classList.add('hidden');
+    progressWrap.classList.add('hidden');
+  });
+}
+
 async function init() {
+  initUpdaterToast();
   initTheme();
   bindTabs();
   bindUi();

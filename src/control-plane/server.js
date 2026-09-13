@@ -2,7 +2,7 @@ const crypto = require('crypto');
 const express = require('express');
 const { parseManifest, parseVersion, compareVersions } = require('../update/manifest');
 
-const CHANNELS = new Set(['modern', 'win7']);
+const CHANNELS = new Set(['modern']);
 const ROLES = new Set(['admin', 'operator']);
 
 function encodeBase64Url(value) {
@@ -162,6 +162,19 @@ function normalizeDeviceInput(raw) {
   return { deviceId, channel, os, appVersion };
 }
 
+// Whitelist-only metadata to prevent DoS or accidental credential leaks
+function sanitizeMetadata(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
+  const allowed = { botActive: 'boolean', heapUsedMb: 'number', rssMb: 'number', uptimeSeconds: 'number' };
+  const result = {};
+  for (const [key, type] of Object.entries(allowed)) {
+    if (raw[key] === undefined || typeof raw[key] !== type) continue;
+    if (type === 'number' && (!Number.isFinite(raw[key]) || raw[key] < 0)) continue;
+    result[key] = raw[key];
+  }
+  return JSON.stringify(result).length <= 512 ? result : {};
+}
+
 function normalizeHeartbeatInput(raw) {
   const body = raw && typeof raw === 'object' ? raw : {};
   const appVersion = String(body.appVersion || '').trim();
@@ -170,7 +183,8 @@ function normalizeHeartbeatInput(raw) {
     appVersion,
     online: body.online !== false,
     lastUpdateStatus: String(body.lastUpdateStatus || 'unknown').slice(0, 80),
-    updaterError: String(body.updaterError || '').slice(0, 2000)
+    updaterError: String(body.updaterError || '').slice(0, 2000),
+    metadata: sanitizeMetadata(body.metadata)
   };
 }
 
@@ -178,7 +192,6 @@ function createReleaseProvider(manifests = {}, { publicKey = '', allowedHosts = 
   function parseConfiguredManifests() {
     const parsed = Object.fromEntries(Object.entries(manifests).filter(([, raw]) => raw).map(([name, raw]) => [name, parseManifest(raw, { allowedHosts })]));
     for (const [name, manifest] of Object.entries(parsed)) if (manifest.channel !== name) throw new Error('Release manifest channel does not match provider channel');
-    if (parsed.modern && parsed.win7 && parsed.modern.version !== parsed.win7.version) throw new Error('Release manifest versions must match');
     return parsed;
   }
 
@@ -318,5 +331,6 @@ module.exports = {
   createHs256Token,
   verifyHs256Token,
   normalizeDeviceInput,
-  normalizeHeartbeatInput
+  normalizeHeartbeatInput,
+  sanitizeMetadata
 };

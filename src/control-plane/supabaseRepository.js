@@ -52,7 +52,8 @@ function createSupabaseRepository({ url, serviceKey, fetchImpl = global.fetch })
       return mapDevice(row);
     },
     async heartbeat(deviceId, input) {
-      const row = (await request('devices', { method: 'PATCH', query: `?device_id=eq.${encodeURIComponent(deviceId)}`, body: { app_version: input.appVersion, online: input.online, last_update_status: input.lastUpdateStatus, updater_error: input.updaterError, last_seen_at: new Date().toISOString() } }))[0];
+      const metaBody = input.metadata && typeof input.metadata === 'object' ? { metadata: input.metadata } : {};
+      const row = (await request('devices', { method: 'PATCH', query: `?device_id=eq.${encodeURIComponent(deviceId)}`, body: { app_version: input.appVersion, online: input.online, last_update_status: input.lastUpdateStatus, updater_error: input.updaterError, last_seen_at: new Date().toISOString(), ...metaBody } }))[0];
       return row ? mapDevice(row) : null;
     },
     async disableUser(id) {
@@ -107,6 +108,7 @@ function mapDevice(row) {
     lastUpdateStatus: row.last_update_status,
     updaterError: row.updater_error,
     deviceTokenHash: row.device_token_hash,
+    metadata: row.metadata || {},
     revoked: row.revoked,
     createdAt: row.created_at,
     updatedAt: row.updated_at

@@ -56,13 +56,14 @@ function createControlPlaneClient({
   supabaseAnonKey = process.env.SUPABASE_ANON_KEY,
   safeStorage,
   userDataPath,
-  channel = Number(String(process.versions?.electron || '0').split('.')[0]) <= 22 ? 'win7' : 'modern',
+  channel = 'modern',
   appVersion = '0.0.0',
   os = process.platform,
   fetchImpl = global.fetch,
   refreshTokenStore,
   deviceTokenStore,
-  deviceId
+  deviceId,
+  getMetadata = null
 } = {}) {
   if (typeof fetchImpl !== 'function') throw new Error('fetch is required');
   const configurationError = !controlPlaneUrl || !supabaseUrl || !supabaseAnonKey ? 'Control plane authentication is not configured' : '';
@@ -191,7 +192,7 @@ function createControlPlaneClient({
     return result.device;
   }
 
-  async function heartbeat({ online = true, lastUpdateStatus = state.lastUpdateStatus, updaterError = state.updaterError } = {}) {
+  async function heartbeat({ online = true, lastUpdateStatus = state.lastUpdateStatus, updaterError = state.updaterError, metadata = null } = {}) {
     if (!configured || state.status === 'disabled' || state.status === 'revoked' || !refreshToken && !accessToken) return getStatus();
     try {
       const id = await getDeviceId();
@@ -200,7 +201,7 @@ function createControlPlaneClient({
       const result = await controlRequest('/v1/devices/heartbeat', {
         method: 'POST',
         headers: { 'X-Device-Token': deviceToken },
-        body: JSON.stringify({ deviceId: id, appVersion, online, lastUpdateStatus, updaterError })
+        body: JSON.stringify({ deviceId: id, appVersion, online, lastUpdateStatus, updaterError, metadata: metadata || (typeof getMetadata === 'function' ? getMetadata() : undefined) })
       });
       setState({ status: 'online', device: result.device || state.device, lastUpdateStatus, updaterError, error: '' });
     } catch (error) {

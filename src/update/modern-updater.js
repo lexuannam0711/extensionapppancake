@@ -108,6 +108,7 @@ function createModernUpdater({
 
   async function checkAtStartup() {
     if (disposed || process.platform !== 'win32') return { status: 'unsupported' };
+    if (pendingInstall) return { status: 'pending' };
     const currentVersion = appImpl.getVersion();
     let manifest;
     try { manifest = await fetchManifest(currentVersion); } catch (error) {

@@ -23,12 +23,7 @@ function readVersion(filePath) {
 }
 
 function validateReleaseVersion({ tag = process.env.GITHUB_REF_NAME || '', root = path.resolve(__dirname, '..') } = {}) {
-  const versions = [
-    readVersion(path.join(root, 'package.json')),
-    readVersion(path.join(root, 'package.win7.json')),
-    readVersion(path.join(root, 'package-lock.json')),
-    readVersion(path.join(root, 'package.win7-lock.json'))
-  ];
+  const versions = [readVersion(path.join(root, 'package.json')), readVersion(path.join(root, 'package-lock.json'))];
   if (new Set(versions).size !== 1) throw new Error(`Package versions must match: ${versions.join(', ')}`);
   const version = tag ? normalizeTag(tag) : versions[0];
   return { version, packageVersion: versions[0] };

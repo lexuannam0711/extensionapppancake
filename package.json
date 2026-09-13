@@ -1,79 +1,79 @@
 {
-    "name":  "pancake-desktop-ai-shortcut-bot-v3",
-    "version":  "3.0.0",
-    "description":  "Electron desktop app cháº¡y Pancake + AI chá»n shortcut /n + upload Excel, khÃ´ng cáº§n extension/VPS.",
-    "main":  "src/main.js",
-    "type":  "commonjs",
-    "scripts":  {
-                    "start":  "electron .",
-                    "server":  "node src/server/index.js",
-                    "check":  "node --check src/main.js \u0026\u0026 node --check src/devtoolsPolicy.js \u0026\u0026 node --check src/automationActivity.js \u0026\u0026 node --check src/guestSecurity.js \u0026\u0026 node --check src/preload.js \u0026\u0026 node --check src/update/manifest.js \u0026\u0026 node --check src/update/integrity.js \u0026\u0026 node --check src/update/pathSafety.js \u0026\u0026 node --check src/update/rollback.js \u0026\u0026 node --check src/update/modern-updater.js \u0026\u0026 node --check src/update/win7-updater.js \u0026\u0026 node --check src/auth/tokenStore.js \u0026\u0026 node --check src/control-plane/client.js && node --check src/control-plane/server.js \u0026\u0026 node --check src/control-plane/supabaseRepository.js \u0026\u0026 node --check scripts/win7-updater.js \u0026\u0026 node --check scripts/audit-artifact.js \u0026\u0026 node --check scripts/create-release-manifest.js \u0026\u0026 node --check scripts/start-control-plane.js \u0026\u0026 node --check src/server/index.js \u0026\u0026 node --check src/server/httpClient.js \u0026\u0026 node --check src/server/uploadPolicy.js \u0026\u0026 node --check src/server/addressLookup.js \u0026\u0026 node --check src/server/ai.js \u0026\u0026 node --check src/server/rules.js \u0026\u0026 node --check src/server/shortcutImporter.js \u0026\u0026 node --check src/server/shortcutMatcher.js \u0026\u0026 node --check src/server/store.js \u0026\u0026 node --check src/server/validators.js \u0026\u0026 node --check src/renderer/app.js \u0026\u0026 node --check src/renderer/automation.js \u0026\u0026 node --check src/renderer/pancakeUrlPolicy.js \u0026\u0026 node --check src/renderer/pancakeDom.js \u0026\u0026 node --check src/renderer/pancakeAutomationGate.js \u0026\u0026 node --check src/renderer/pancakeAutomationPayload.js \u0026\u0026 node --check src/renderer/webviewAutomation.js \u0026\u0026 node --check src/renderer/webviewTabNavigation.js \u0026\u0026 node --check src/renderer/conversationProcessing.js \u0026\u0026 node --check src/renderer/botDecision.js \u0026\u0026 node --check src/renderer/buyTtsNotifier.js \u0026\u0026 node --check src/renderer/conversationClaims.js \u0026\u0026 node --check src/renderer/icons.js",
-                    "test":  "node --test \"test/*.test.js\"",
-                    "test:e2e":  "playwright test",
-                    "build:modern":  "electron-builder --win nsis --publish never",
-                    "build:win7":  "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-win7.ps1",
-                    "audit:artifact":  "node scripts/audit-artifact.js",
-                    "release:manifest":  "node scripts/create-release-manifest.js",
-                    "control-plane":  "node scripts/start-control-plane.js"
-                },
-    "dependencies":  {
-                         "@google/generative-ai":  "^0.24.1",
-                         "@iarna/toml":  "3.0.0",
-                         "cors":  "^2.8.5",
-                         "dotenv":  "^16.4.7",
-                         "electron-updater":  "^6.8.9",
-                         "express":  "^4.21.2",
-                         "multer":  "^1.4.5-lts.1",
-                         "xlsx":  "^0.18.5"
-                     },
-    "devDependencies":  {
-                            "@playwright/test":  "1.61.1",
-                            "electron-builder":  "^26.15.3",
-                            "electron":  "^34.0.0",
-                            "fast-check":  "4.8.0"
-                        },
-    "build":  {
-                  "appId":  "com.pancake.desktop.ai.shortcut.bot",
-                  "productName":  "Pancake Desktop AI Shortcut Bot",
-                  "artifactName":  "PancakeDesktopAIShortcutBot-${version}-${arch}.${ext}",
-                  "asar":  true,
-                  "directories":  {
-                                      "output":  "dist"
-                                  },
-                  "files":  [
-                                "src/**/*",
-                                "extensions/**/*",
-                                "README.md",
-                                "package.json",
-                                "!**/.env*",
-                                "!**/server/data/**",
-                                "!**/uploads/**",
-                                "!**/*.log",
-                                "!scripts/**",
-                                "!test/**",
-                                "!docs/**"
-                            ],
-                  "win":  {
-                              "target":  [
-                                             {
-                                                 "target":  "nsis",
-                                                 "arch":  [
-                                                              "x64"
-                                                          ]
-                                             }
-                                         ]
-                          },
-                  "nsis":  {
-                               "oneClick":  false,
-                               "perMachine":  false,
-                               "allowToChangeInstallationDirectory":  true,
-                               "createDesktopShortcut":  true
-                           },
-                  "publish":  {
-                                  "provider":  "github",
-                                  "owner":  "lexuannam0711",
-                                  "repo":  "extensionapppancake",
-                                  "releaseType":  "draft"
-                              }
-              }
+  "name": "pancake-desktop-ai-shortcut-bot-v3",
+  "version": "3.0.0",
+  "description": "Electron desktop app chÃ¡ÂºÂ¡y Pancake + AI chÃ¡Â»Ân shortcut /n + upload Excel, khÃƒÂ´ng cÃ¡ÂºÂ§n extension/VPS.",
+  "main": "src/main.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "electron .",
+    "server": "node src/server/index.js",
+    "check": "node --check src/main.js && node --check src/devtoolsPolicy.js && node --check src/automationActivity.js && node --check src/guestSecurity.js && node --check src/preload.js && node --check src/update/manifest.js && node --check src/update/integrity.js && node --check src/update/pathSafety.js && node --check src/update/rollback.js && node --check src/update/modern-updater.js && node --check src/update/electronUpdaterBridge.js && node --check src/auth/tokenStore.js && node --check src/control-plane/client.js && node --check src/control-plane/server.js && node --check src/control-plane/supabaseRepository.js && node --check scripts/audit-artifact.js && node --check scripts/create-release-manifest.js && node --check scripts/start-control-plane.js && node --check src/server/index.js && node --check src/server/httpClient.js && node --check src/server/uploadPolicy.js && node --check src/server/addressLookup.js && node --check src/server/ai.js && node --check src/server/rules.js && node --check src/server/shortcutImporter.js && node --check src/server/shortcutMatcher.js && node --check src/server/store.js && node --check src/server/validators.js && node --check src/renderer/app.js && node --check src/renderer/automation.js && node --check src/renderer/autoReplyPreview.js && node --check src/renderer/pancakeUrlPolicy.js && node --check src/renderer/pancakeDom.js && node --check src/renderer/pancakeAutomationGate.js && node --check src/renderer/pancakeAutomationPayload.js && node --check src/renderer/webviewAutomation.js && node --check src/renderer/webviewTabNavigation.js && node --check src/renderer/conversationProcessing.js && node --check src/renderer/botDecision.js && node --check src/renderer/buyTtsNotifier.js && node --check src/renderer/conversationClaims.js && node --check src/renderer/icons.js",
+    "test": "node --test \"test/*.test.js\"",
+    "test:e2e": "playwright test",
+    "build:modern": "electron-builder --win nsis --publish never",
+    "audit:artifact": "node scripts/audit-artifact.js",
+    "release:manifest": "node scripts/create-release-manifest.js",
+    "control-plane": "node scripts/start-control-plane.js",
+    "build:publish": "electron-builder --win nsis --publish always"
+  },
+  "dependencies": {
+    "@google/generative-ai": "^0.24.1",
+    "@iarna/toml": "3.0.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "electron-updater": "^6.8.9",
+    "express": "^4.21.2",
+    "multer": "^1.4.5-lts.1",
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.61.1",
+    "electron-builder": "^26.15.3",
+    "electron": "^34.0.0",
+    "fast-check": "4.8.0"
+  },
+  "build": {
+    "appId": "com.pancake.desktop.ai.shortcut.bot",
+    "productName": "Pancake Desktop AI Shortcut Bot",
+    "artifactName": "PancakeDesktopAIShortcutBot-${version}-${arch}.${ext}",
+    "asar": true,
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "src/**/*",
+      "extensions/**/*",
+      "README.md",
+      "package.json",
+      "!**/.env*",
+      "!**/server/data/**",
+      "!**/uploads/**",
+      "!**/*.log",
+      "!scripts/**",
+      "!test/**",
+      "!docs/**"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "lexuannam0711",
+      "repo": "extensionapppancake",
+      "releaseType": "draft"
+    }
+  }
 }

@@ -5,7 +5,7 @@ const path = require('path');
 const { app, BrowserWindow, ipcMain, dialog, shell, webContents, safeStorage } = require('electron');
 const { configureStorePaths } = require('./server/store');
 const { createModernUpdater } = require('./update/modern-updater');
-const { createWin7Updater } = require('./update/win7-updater');
+const { createElectronUpdaterBridge } = require('./update/electronUpdaterBridge');
 const telegram = require('./server/telegram');
 const extManager = require('./extensionManager');
 const { createAutomationActivity } = require('./automationActivity');
@@ -21,6 +21,7 @@ process.env.ELECTRON_DISABLE_SECURITY_WARNINGS = 'true';
 let mainWindow;
 let server;
 let updater = null;
+let periodicUpdateTimer = null;
 let controlPlaneClient = null;
 let controlPlaneInitialization = Promise.resolve();
 const localApiToken = crypto.randomBytes(32).toString('base64url');
@@ -107,6 +108,9 @@ function registerIpcHandlers() {
   ipcMain.removeHandler('ext:list');
   ipcMain.removeHandler('ext:reload');
   ipcMain.removeHandler('ext:open-folder');
+  ipcMain.removeHandler('updater:get-state');
+  ipcMain.removeHandler('updater:check');
+  ipcMain.removeHandler('updater:quit-and-install');
 
   ipcMain.handle('app:get-env', () => ({
     serverUrl: `http://localhost:${activePort}`,
@@ -217,16 +221,21 @@ async function createWindow() {
     legacyRoot: path.resolve(__dirname, '../server/data')
   });
   const { startServer } = require('./server/index');
-  const electronMajor = Number(String(process.versions.electron || '0').split('.')[0]);
   controlPlaneClient = createControlPlaneClient({
     controlPlaneUrl: process.env.CONTROL_PLANE_URL,
     supabaseUrl: process.env.SUPABASE_URL,
     supabaseAnonKey: process.env.SUPABASE_ANON_KEY,
     safeStorage,
     userDataPath: app.getPath('userData'),
-    channel: electronMajor <= 22 ? 'win7' : 'modern',
+    channel: 'modern',
     appVersion: app.getVersion(),
-    os: process.platform
+    os: process.platform,
+    getMetadata: () => ({
+      botActive: hasActiveAutomation(),
+      heapUsedMb: Math.round(process.memoryUsage().heapUsed / 1024 / 1024),
+      rssMb: Math.round(process.memoryUsage().rss / 1024 / 1024),
+      uptimeSeconds: Math.floor(process.uptime())
+    })
   });
   activePort = Number(process.env.PORT || 8787);
   registerIpcHandlers();
@@ -290,21 +299,22 @@ async function createWindow() {
     publishControlPlaneStatus();
   });
 
-  const updaterFactory = Number(String(process.versions.electron || '0').split('.')[0]) <= 22 ? createWin7Updater : createModernUpdater;
-  updater = updaterFactory({
+  updater = createElectronUpdaterBridge({
     getWindow: () => mainWindow,
-    manifestUrl: process.env.UPDATE_MANIFEST_URL,
-    publicKey: app.isPackaged ? readTrustedUpdateKey() : (process.env.UPDATE_PUBLIC_KEY || readTrustedUpdateKey()),
-    allowedHosts: process.env.UPDATE_ALLOWED_HOSTS
+    controlPlaneClient
   });
-  updater.checkAtStartup().then((result) => {
-    controlPlaneClient.setUpdateStatus(result.status);
-    publishControlPlaneStatus();
-  }).catch((error) => {
-    console.error('[update] startup check failed: ' + error.message);
-    controlPlaneClient.setUpdateStatus('error', error.message);
-    publishControlPlaneStatus();
-  });
+  if (app.isPackaged || process.env.CHECK_UPDATE_ON_START === 'true') {
+    updater.checkForUpdates().catch((err) => {
+      console.error('[updater] startup check failed:', err.message);
+    });
+  }
+  periodicUpdateTimer = setInterval(() => {
+    if (!mainWindow || mainWindow.isDestroyed() || hasActiveAutomation()) return;
+    updater.checkForUpdates().catch((err) => {
+      console.error('[updater] periodic check failed:', err.message);
+    });
+  }, 4 * 60 * 60 * 1000);
+  periodicUpdateTimer.unref?.();
 
   // When the window is minimized, hint the renderer to release memory.
   mainWindow.on('minimize', () => {
@@ -330,6 +340,7 @@ async function createWindow() {
 
   mainWindow.on('closed', () => {
     if (visibleGcTimer) { clearInterval(visibleGcTimer); visibleGcTimer = null; }
+    if (periodicUpdateTimer) { clearInterval(periodicUpdateTimer); periodicUpdateTimer = null; }
     resetAutomationActivity();
     automationActivity = null;
     mainWindow = null;
@@ -386,7 +397,7 @@ app.whenReady().then(createWindow);
 
 app.on('before-quit', () => {
   controlPlaneClient?.dispose();
-  updater?.installOnQuit();
+  if (updater?.installOnQuit) { updater.installOnQuit(); }
 });
 
 app.on('window-all-closed', () => {

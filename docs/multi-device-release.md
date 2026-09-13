@@ -3,10 +3,9 @@
 ## Implemented local foundations
 
 - Modern Windows build uses Electron 34 + NSIS through `npm run build:modern`.
-- Win7 build uses Electron 22 + pinned `package.win7-lock.json` and portable ZIP through `npm run build:win7`.
+- Modern Windows build is the only supported release target.
 - Release manifest carries `version`, `channel`, `minSupportedVersion`, HTTPS artifact URL, SHA-256, Ed25519 signature, and release notes.
 - `src/update/modern-updater.js` checks a signed manifest on startup, verifies exact installer SHA-256 bytes, asks before download, and launches the verified NSIS installer on quit. Release CI embeds the Ed25519 public key in the artifact.
-- `scripts/win7-updater.js` runs outside the app, verifies manifest/artifact, rejects unsafe extracted paths, swaps app tree atomically, and leaves backup for rollback.
 - Runtime JSON and uploads move to stable `%APPDATA%/PancakeDesktopAIShortcutBot/{data,uploads}` in Electron. `PANCAKE_DATA_DIR` and `PANCAKE_UPLOADS_DIR` remain for server-only development.
 - `metadata.json` records `dataSchemaVersion`; migration copies only missing allowlisted files and creates backup when target data already exists.
 - AI credentials are no longer returned by health/settings/config responses or saved in settings logs. Existing local credentials still require rotation before public release.
@@ -21,7 +20,7 @@
 1. Configure Supabase, VPS HTTPS, `SUPABASE_JWT_SECRET`, `SUPABASE_URL`, and `SUPABASE_SERVICE_ROLE_KEY` on VPS only.
 2. Configure GitHub `release` environment secrets: `WIN_CERTIFICATE_BASE64`, `WIN_CERTIFICATE_PASSWORD`, and `RELEASE_SIGNING_PRIVATE_KEY`.
 3. Push code. CI runs `npm run check`, `npm test`, `npm audit`, and artifact scan.
-4. Admin creates tag `vX.Y.Z`. Release workflow builds modern NSIS and Win7 ZIP, signs, creates manifests, and opens a draft GitHub Release.
+4. Admin creates tag `vX.Y.Z`. Release workflow builds modern NSIS, signs, creates a manifest, and opens a draft GitHub Release.
 5. Admin inspects draft artifacts and publishes release. Workflow never publishes automatically.
 6. Set app `UPDATE_MANIFEST_URL` to VPS `/v1/update-manifest`, `UPDATE_PUBLIC_KEY` to shipped release public key, and `UPDATE_ALLOWED_HOSTS` to artifact hosts.
 
@@ -35,5 +34,5 @@
 
 - Rotate any existing AI/Telegram credentials before a public release.
 - Apply SQL in a new production Supabase project, then test RLS with operator/admin accounts.
-- Pilot one Windows 10/11 machine and one Windows 7 machine offline/online before wider deployment.
+- Pilot one supported Windows machine offline/online before wider deployment.
 - Test interrupted downloads, invalid signatures, locked files, blocked versions, rollback, and data preservation. Live Supabase/VPS device registration and operator login still require deployment-level integration testing.

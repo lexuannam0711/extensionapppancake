@@ -97,81 +97,8 @@ jobs:
           path: release-assets/*
           if-no-files-found: error
 
-  win7:
-    needs: validate-release
-    runs-on: windows-latest
-    environment: release
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: npm
-      - name: Verify protected tag checkout
-        shell: pwsh
-        run: |
-          if ((git status --porcelain).Length -ne 0) { throw 'Release checkout is dirty.' }
-          $tagCommit = git rev-list -n 1 $env:GITHUB_REF_NAME
-          $headCommit = git rev-parse HEAD
-          if ($tagCommit -ne $headCommit) { throw 'Tag does not point at checked-out commit.' }
-      - run: npm ci
-      - name: Verify npm install did not modify checkout
-        shell: pwsh
-        run: if ((git status --porcelain).Length -ne 0) { throw 'npm ci modified release checkout.' }
-      - name: Set Win7 release version
-        shell: pwsh
-        run: |
-          $version = $env:GITHUB_REF_NAME.Substring(1)
-          npm version --no-git-tag-version $version
-          foreach ($file in @('package.win7.json', 'package.win7-lock.json')) {
-            $json = Get-Content -Raw -LiteralPath $file | ConvertFrom-Json
-            $json.version = $version
-            $rootPackage = $json.packages.PSObject.Properties | Where-Object { $_.Name -eq '' }
-            if ($rootPackage) { $rootPackage.Value.version = $version }
-            $json | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $file -Encoding utf8
-          }
-      - run: node scripts/audit-artifact.js src
-      - name: Prepare pinned updater public key
-        shell: pwsh
-        env:
-          RELEASE_SIGNING_PRIVATE_KEY: ${{ secrets.RELEASE_SIGNING_PRIVATE_KEY }}
-        run: node scripts/prepare-release-key.js --output src/update/trusted-public-key.pem
-      - run: node scripts/audit-artifact.js src
-      - name: Build Win7 portable ZIP
-        run: npm run build:win7
-      - name: Audit generated Win7 payload
-        shell: pwsh
-        run: |
-          $zip = Get-ChildItem dist -Filter '*-Win7-x64.zip' | Select-Object -First 1
-          if (-not $zip) { throw 'Win7 ZIP not found.' }
-          $temp = Join-Path $env:RUNNER_TEMP 'win7-audit'
-          Expand-Archive -LiteralPath $zip.FullName -DestinationPath $temp -Force
-          node scripts/audit-artifact.js $temp
-      - name: Create signed Win7 manifest
-        shell: pwsh
-        env:
-          RELEASE_SIGNING_PRIVATE_KEY: ${{ secrets.RELEASE_SIGNING_PRIVATE_KEY }}
-        run: |
-          $artifact = Get-ChildItem dist -Filter '*-Win7-x64.zip' | Select-Object -First 1
-          if (-not $artifact) { throw 'Win7 ZIP not found.' }
-          node scripts/create-release-manifest.js --artifact $artifact.FullName --version $env:GITHUB_REF_NAME --channel win7 --min-supported-version 3.0.0 --url "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/$($artifact.Name)" --output dist/manifest-win7.json
-      - name: Stage Win7 release assets
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force release-assets | Out-Null
-          $artifact = Get-ChildItem dist -Filter '*-Win7-x64.zip' | Select-Object -First 1
-          Copy-Item $artifact.FullName release-assets
-          Copy-Item dist/manifest-win7.json release-assets
-      - uses: actions/upload-artifact@v4
-        with:
-          name: win7-release
-          path: release-assets/*
-          if-no-files-found: error
-
   draft-release:
-    needs: [modern, win7]
+    needs: [modern]
     runs-on: ubuntu-latest
     permissions:
       contents: write
