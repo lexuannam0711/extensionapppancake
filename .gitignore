@@ -40,3 +40,5 @@ build/
 # Archives / packaged binaries
 *.zip
 *.exe
+# Signing keys (NEVER commit)
+*.pem
