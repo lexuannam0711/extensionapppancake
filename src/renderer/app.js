@@ -260,7 +260,12 @@ function renderControlPlaneStatus(next = {}) {
   if ($('authLogoutBtn')) $('authLogoutBtn').hidden = !(signedIn || terminal);
   if ($('accountEmail')) $('accountEmail').disabled = signedIn || next.status === 'signing_in';
   if ($('accountPassword')) $('accountPassword').disabled = signedIn || next.status === 'signing_in';
-  if ($('authStatus')) $('authStatus').textContent = next.error ? `${next.status}: ${next.error}` : next.status;
+  const statusText = next.error ? `Lỗi: ${next.error}` : signedIn ? `Đang hoạt động (${next.profile?.email || 'Online'})` : next.status === 'signing_in' ? 'Đang đăng nhập...' : 'Chưa đăng nhập';
+  if ($('authStatus')) $('authStatus').textContent = statusText;
+  if ($('authStatusBadge')) {
+    $('authStatusBadge').textContent = signedIn ? 'Online' : next.status === 'signing_in' ? 'Đang vào...' : 'Chưa đăng nhập';
+    $('authStatusBadge').className = signedIn ? 'badge' : 'badge offline';
+  }
   if ($('authStatusCompact')) $('authStatusCompact').textContent = next.error ? 'Error' : (next.status || 'Offline');
 }
 

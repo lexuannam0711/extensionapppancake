@@ -162,7 +162,7 @@
           <h2>Danh sách thiết bị máy trạm</h2>
           <div style="width:240px;"><input type="text" id="device-search" class="input-text" placeholder="Tìm kiếm theo Device ID..." style="padding:0.35rem 0.6rem;font-size:12px;"></div>
         </div>
-        <div class="table-responsive"><table id="table-devices"><thead><tr><th>Trạng thái</th><th>Device ID</th><th>Hệ điều hành</th><th>Phiên bản App</th><th>Hoạt động cuối</th><th>Thao tác</th></tr></thead><tbody id="devices-tbody"><tr><td colspan="6" class="empty-state">Đang tải dữ liệu...</td></tr></tbody></table></div>
+        <div class="table-responsive"><table id="table-devices"><thead><tr><th>Trạng thái</th><th>Device ID</th><th>Tài khoản</th><th>Hệ điều hành</th><th>Phiên bản App</th><th>Hoạt động cuối</th><th>Thao tác</th></tr></thead><tbody id="devices-tbody"><tr><td colspan="7" class="empty-state">Đang tải dữ liệu...</td></tr></tbody></table></div>
       </div>
     </div>
     <div id="tab-users" class="tab-content" style="display:none;">
@@ -267,14 +267,16 @@
   }
   function renderDevices(devices) {
     const dBody = el("devices-tbody");
-    if (!devices.length) { dBody.innerHTML = "<tr><td colspan=\"6\" class=\"empty-state\">Chưa có thiết bị nào đăng ký.</td></tr>"; return; }
+    if (!devices.length) { dBody.innerHTML = "<tr><td colspan=\"7\" class=\"empty-state\">Chưa có thiết bị nào đăng ký.</td></tr>"; return; }
     dBody.innerHTML = devices.map(d => {
       const isOnline = d.online && !d.revoked;
       const statusBadge = d.revoked ? "<span class=\"badge badge-danger\">Đã thu hồi</span>" : isOnline ? "<span class=\"badge badge-online\">Online</span>" : "<span class=\"badge badge-offline\">Offline</span>";
       const actionBtn = !d.revoked ? "<button class=\"btn btn-danger btn-sm\" onclick=\"revokeDevice('" + escapeHtml(d.deviceId) + "')\">Thu hồi</button>" : "<span style=\"font-size:12px;color:var(--text-dim);\">-</span>";
+      const userEmail = d.userEmail || d.userId || "-";
       return "<tr>" +
         "<td>" + statusBadge + "</td>" +
         "<td><span class=\"code-tag\">" + escapeHtml(d.deviceId) + "</span></td>" +
+        "<td style=\"font-weight:500;color:var(--text-main);\">" + escapeHtml(userEmail) + "</td>" +
         "<td>" + escapeHtml(d.os || "-") + "</td>" +
         "<td><span class=\"code-tag\">v" + escapeHtml(d.appVersion || "-") + "</span></td>" +
         "<td>" + formatTime(d.lastSeenAt) + "</td>" +
@@ -309,7 +311,7 @@
   el("device-search")?.addEventListener("input", (e) => {
     const q = e.target.value.toLowerCase().trim();
     if (!q) renderDevices(cachedDevices);
-    else renderDevices(cachedDevices.filter(d => (d.deviceId || "").toLowerCase().includes(q)));
+    else renderDevices(cachedDevices.filter(d => (d.deviceId || "").toLowerCase().includes(q) || (d.userEmail || "").toLowerCase().includes(q)));
   });
   document.querySelectorAll(".tab-btn").forEach(btn => {
     btn.addEventListener("click", () => {

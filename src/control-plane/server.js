@@ -324,7 +324,15 @@ function createControlPlaneApp({ repository = createInMemoryRepository(), manife
 
   app.use('/v1/admin', authenticate, requireAdmin);
   app.get('/v1/admin/users', async (_req, res) => res.json({ items: await repository.listUsers() }));
-  app.get('/v1/admin/devices', async (_req, res) => res.json({ items: (await repository.listDevices()).map(toPublicDevice) }));
+  app.get('/v1/admin/devices', async (_req, res) => {
+    const [devices, users] = await Promise.all([repository.listDevices(), repository.listUsers()]);
+    const userMap = new Map(users.map((u) => [u.id, u.email]));
+    const enriched = devices.map((d) => ({
+      ...toPublicDevice(d),
+      userEmail: userMap.get(d.userId) || ''
+    }));
+    res.json({ items: enriched });
+  });
   app.get('/v1/admin/audit', async (_req, res) => res.json({ items: await repository.listAuditEvents() }));
   app.post('/v1/admin/users/:id/disable', async (req, res) => {
     const user = await repository.disableUser(req.params.id);

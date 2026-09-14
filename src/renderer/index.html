@@ -73,6 +73,7 @@
 
       <nav class="tabs">
         <button class="tab active" data-tab="overview">Tổng quan</button>
+        <button class="tab" data-tab="accountAuthTab">Tài khoản</button>
         <button class="tab" data-tab="bot">Bot</button>
         <button class="tab" data-tab="autoReplyPreview">Preview Reply</button>
         <button class="tab" data-tab="shortcuts">Excel</button>
@@ -106,6 +107,33 @@
           <div class="card-title-row"><h3>Thống kê bot</h3><button id="botStatsRefresh" class="btn ghost small">Làm mới</button></div>
           <p class="hint">Tính trên các sự kiện gần nhất (log xoay vòng, không phải toàn lịch sử).</p>
           <div id="botStats" class="bot-stats">Chưa có dữ liệu</div>
+        </div>
+      </section>
+
+      <section id="accountAuthTab" class="tab-panel">
+        <div class="card" id="accountAuthCard">
+          <div class="card-title-row">
+            <h3>Đăng nhập máy trạm (Control Plane)</h3>
+            <span id="authStatusBadge" class="badge offline">Chưa đăng nhập</span>
+          </div>
+          <p class="hint">Đăng nhập tài khoản nhân viên được cấp (ví dụ: may1@xuannam.com). Máy sẽ tự động liên kết với hệ thống quản trị và gửi trạng thái hoạt động.</p>
+          <div id="accountAuth">
+            <div class="form-row">
+              <label for="accountEmail">Email máy trạm</label>
+              <input id="accountEmail" type="email" autocomplete="username" placeholder="may1@xuannam.com" />
+            </div>
+            <div class="form-row">
+              <label for="accountPassword">Mật khẩu</label>
+              <input id="accountPassword" type="password" autocomplete="current-password" placeholder="••••••••" />
+            </div>
+            <div class="actions" style="margin-top:12px;">
+              <button id="authLoginBtn" class="btn success" type="button">Đăng nhập máy này</button>
+              <button id="authLogoutBtn" class="btn danger" type="button" hidden>Đăng xuất</button>
+            </div>
+            <div style="margin-top:10px;font-size:12px;color:var(--muted);">
+              Trạng thái: <strong id="authStatus">Chưa kết nối</strong>
+            </div>
+          </div>
         </div>
       </section>
 
