@@ -94,6 +94,21 @@ test('electronUpdaterBridge blocks update if device is revoked on VPS', () => {
   assert.match(bridge.getState().error, /blocked/i);
   assert.equal(mockAutoUpdater.downloadCalled, false);
 });
+
+test('electronUpdaterBridge treats missing GitHub release as not available', () => {
+  const sent = [];
+  const bridge = createElectronUpdaterBridge({
+    getWindow: () => ({ isDestroyed: () => false, webContents: { send: (ch, d) => sent.push({ ch, d }) } })
+  });
+
+  mockAutoUpdater.emit('error', new Error('Cannot parse releases feed: invalid XML\nXML: <feed>...'));
+
+  assert.equal(bridge.getState().status, 'not-available');
+  assert.equal(bridge.getState().error, null);
+  assert.equal(sent.some((event) => event.ch === 'updater:error'), false);
+  assert.equal(sent.some((event) => event.ch === 'updater:not-available'), true);
+});
+
 test('electronUpdaterBridge dispose cleans up all listeners on autoUpdater', () => {
   const bridge = createElectronUpdaterBridge();
   const initialListenerCount = mockAutoUpdater.eventNames().reduce((sum, ev) => sum + mockAutoUpdater.listenerCount(ev), 0);
