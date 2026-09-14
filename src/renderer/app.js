@@ -2852,8 +2852,9 @@ function initUpdaterToast() {
   });
 
   window.pancakeDesktop.onUpdateError?.((err) => {
-    if (err?.message && /trust configuration|not-configured/i.test(err.message)) return;
-    msg.textContent = `Lỗi cập nhật: ${err?.message || 'Không xác định'}`;
+    const raw = String(err?.message || '');
+    if (!raw || /trust configuration|not-configured|cannot parse|no published|unable to find/i.test(raw)) return;
+    msg.textContent = `Lỗi cập nhật: ${raw.split('\n')[0].slice(0, 120)}`;
     toast.classList.remove('hidden');
     installBtn.classList.add('hidden');
     progressWrap.classList.add('hidden');

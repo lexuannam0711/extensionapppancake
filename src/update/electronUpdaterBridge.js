@@ -72,7 +72,16 @@ function createElectronUpdaterBridge({
   };
 
   const onError = (error) => {
-    const errorMsg = error?.message || String(error || 'Unknown update error');
+    const raw = error?.message || String(error || 'Unknown update error');
+    // If GitHub has no public release yet or feed parsing returns XML error,
+    // treat it as quiet not-available so operator screen is not polluted.
+    if (/cannot parse releases feed|no published versions|unable to find latest version|latest release artifacts/i.test(raw)) {
+      setState({ status: 'not-available', info: null, error: null });
+      controlPlaneClient?.setUpdateStatus('current');
+      sendToWindow('updater:not-available', null);
+      return;
+    }
+    const errorMsg = raw.split('\n')[0].replace(/\s{2,}/g, ' ').slice(0, 160);
     setState({ status: 'error', error: errorMsg });
     controlPlaneClient?.setUpdateStatus('error', errorMsg);
     sendToWindow('updater:error', { message: errorMsg });
