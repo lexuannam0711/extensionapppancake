@@ -6,6 +6,8 @@ contextBridge.exposeInMainWorld('pancakeDesktop', {
   login: (payload) => ipcRenderer.invoke('auth:login', payload),
   logout: () => ipcRenderer.invoke('auth:logout'),
   onAuthStatus: (callback) => ipcRenderer.on('auth:status', (_evt, status) => callback(status)),
+  onTelegramControl: (callback) => ipcRenderer.on('telegram:control', (_evt, control) => callback(control)),
+  reportTelegramReviewResult: (requestId, ok) => ipcRenderer.invoke('telegram:review-result', { requestId, ok }),
   openExternal: (url) => ipcRenderer.invoke('app:open-external', url),
   showMessage: (options) => ipcRenderer.invoke('app:show-message', options),
   openDevTools: (webContentsId) => ipcRenderer.invoke('app:open-devtools', { webContentsId }),

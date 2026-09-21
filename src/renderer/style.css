@@ -108,13 +108,6 @@ body { margin: 0; background: var(--bg); color: var(--text); overflow: hidden; -
 .mini-btn#miniAutoReplyPreviewBtn.on { background: #2563eb; color: #fff; border-color: #2563eb; }
 .mini-rail.hidden { opacity: 0; pointer-events: none; }
 /* Badge số trên nút hàng đợi (không live-dot) */
-#miniQueueBadge {
-  position: absolute; top: -4px; right: -4px;
-  padding: 0 5px; min-width: 16px; height: 16px;
-  font-size: 10px; line-height: 16px; text-align: center;
-  background: var(--honey-soft); color: var(--honey);
-}
-#miniQueueBadge::before { display: none; }
 
 /* --- Browser toolbar (compact, console-style) --- */
 .browser-toolbar {
@@ -496,71 +489,8 @@ tbody tr:hover { background: var(--surface-2); }
   .control-panel, .panel-backdrop, .mini-btn, .btn, .tab, .browser-tab { transition: none; }
   .control-panel.open { animation: none; }
   .tab-panel.active, .toast { animation: none; }
-  .rq-item { transition: none; }
   .palette-btn { transition: none; }
 }
-
-/* --- Review queue (admin review) UI --- */
-/* Flat layout: thin borders + small radius, no large shadow/blur (perf: GPU off). */
-.rq-header {
-  display: flex; justify-content: space-between; align-items: center;
-  gap: 10px; margin-bottom: 12px;
-}
-.rq-header h3 { margin: 0; }
-.rq-header > div { display: flex; gap: 8px; flex: 0 0 auto; }
-
-/* Numeric count badge inside the tab: reuse .badge pill but drop the live dot. */
-#reviewQueueBadge {
-  padding: 1px 7px;
-  font-size: 10px;
-  background: var(--honey-soft);
-  color: var(--honey);
-  vertical-align: middle;
-}
-#reviewQueueBadge::before { display: none; }
-
-.rq-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
-
-.rq-item {
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-left: 3px solid var(--honey);
-  border-radius: var(--r-md);
-  padding: 12px;
-  /* Only transform/opacity, ≤250ms (Req 2.6). */
-  transition: opacity .2s ease-out, transform .2s ease-out;
-}
-.rq-item-name { font-weight: 700; font-size: 13px; color: var(--ink); }
-.rq-item-msg { margin: 4px 0; font-size: 13px; line-height: 1.45; color: var(--text); }
-.rq-item-reason { font-size: 12px; color: var(--muted); }
-.rq-address {
-  margin-top: 8px;
-  padding: 8px;
-  border: 1px solid var(--line);
-  border-radius: var(--r-sm);
-  background: var(--surface-2);
-  font-size: 12px;
-  color: var(--text);
-  display: grid;
-  gap: 4px;
-}
-.rq-address .btn { width: fit-content; margin-top: 2px; }
-.rq-item-time { margin-top: 2px; font-size: 11px; font-family: var(--mono); color: var(--muted); }
-.rq-item .actions { margin-top: 10px; }
-
-.rq-empty {
-  text-align: center; color: var(--muted); font-size: 13px;
-  padding: 24px 12px;
-  background: var(--surface-2);
-  border: 1px dashed var(--line); border-radius: var(--r-md);
-}
-.rq-error {
-  text-align: center; color: var(--red); font-size: 13px;
-  padding: 12px; margin-bottom: 10px;
-  background: var(--red-soft);
-  border: 1px solid var(--red); border-radius: var(--r-sm);
-}
-.rq-error.hidden, .rq-empty.hidden { display: none; }
 
 /* --- Shortcut palette (ai-suggestion-trainer) --- */
 /* Flat chips: thin borders + theme vars, no large shadow/blur (perf: GPU off). */

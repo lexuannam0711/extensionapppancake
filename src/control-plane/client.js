@@ -2,6 +2,7 @@ const crypto = require('crypto');
 const fs = require('fs/promises');
 const path = require('path');
 const { createEncryptedTokenStore } = require('../auth/tokenStore');
+const { requestJsonCompat } = require('../server/httpClient');
 
 function normalizeUrl(raw, name, { allowLocalHttp = false } = {}) {
   const value = String(raw || '').trim();
@@ -59,7 +60,7 @@ function createControlPlaneClient({
   channel = 'modern',
   appVersion = '0.0.0',
   os = process.platform,
-  fetchImpl = global.fetch,
+  fetchImpl = requestJsonCompat,
   refreshTokenStore,
   deviceTokenStore,
   deviceId,

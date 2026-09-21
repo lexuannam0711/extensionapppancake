@@ -25,10 +25,10 @@ let lastCustomerMessage = ''; // most recent analyzed message (used for learning
 let currentContextMessage = ''; // tin mới nhất của khách Trợ lý vừa đọc (live-suggest-fill)
 let activeWvTab = 'bot1'; // 'bot1'/'bot2' run bot, 'manual' is clean/manual
 let pageVisible = true;
-let reviewQueueTimer = null;   // setInterval handle while the queue tab is open
-let reviewQueueCache = [];     // last rendered pending items (kept on load error)
 const timers = [];
 const uncertainConversationBlocks = new Set();
+const systemAlertThrottle = new Map();
+const SYSTEM_ALERT_THROTTLE_MS = 120000;
 
 // Cap the processed-conversation cache so a long-running bot session cannot
 // grow memory without bound. Entries also expire by time (PROCESSED_TTL_MS).
@@ -417,12 +417,11 @@ function isTransientAutomationError(error) {
 }
 
 // The loop stopped because an action may already have taken effect in Pancake.
-// Name the action so the admin knows what to verify instead of only seeing that
-// the bot went quiet.
+// Name the action so the operator can inspect state before restarting automation.
 async function logUncertainStop(runtime, type, method) {
   const safeMethod = /^[A-Za-z]{1,64}$/.test(String(method || '')) ? String(method) : '';
   const detail = safeMethod ? ` (${safeMethod})` : '';
-  await log('ERROR', type, prefixRuntime(runtime, `Automation stopped: uncertain action requires review${detail}`));
+  await log('ERROR', type, prefixRuntime(runtime, `Automation stopped: uncertain action; conversation blocked${detail}`));
   toast(
     safeMethod
       ? `${getRuntimeLabel(runtime)} đã dừng: "${safeMethod}" có thể đã chạy — hãy kiểm tra hội thoại trước khi bật lại.`
@@ -530,7 +529,7 @@ async function executeInTab(tabId, js, label = 'executeJavaScript') {
     wrapped.code = error?.code || 'AUTOMATION_EXECUTION_FAILED';
     wrapped.cause = error;
     // Only a non-idempotent action leaves the page in an unknown state after a
-    // failed dispatch, so only those stop the loop for review. Replaying
+    // failed dispatch, so only those stop the loop because state is uncertain. Replaying
     // clickConversationById/setReplyText/applyTagByName is harmless, and
     // treating their transient failures as uncertain was stopping the bot for
     // errors that had no effect on Pancake.
@@ -698,6 +697,7 @@ async function loadSettings() {
   $('autoSend').checked = Boolean(settings.autoSend);
   $('shortcutOnlyMode').checked = settings.shortcutOnlyMode !== false;
   if ($('buyTtsEnabled')) $('buyTtsEnabled').checked = settings.buyTtsEnabled !== false;
+  if ($('buyTtsExternalEnabled')) $('buyTtsExternalEnabled').checked = settings.buyTtsExternalEnabled !== false;
   if ($('buyTtsDebounceMs')) $('buyTtsDebounceMs').value = settings.buyTtsDebounceMs || 1500;
   if ($('learnExamplesEnabled')) $('learnExamplesEnabled').checked = settings.learnExamplesEnabled !== false;
   $('newCustomerShortcut').value = settings.defaultNewCustomerShortcut || '/1';
@@ -727,6 +727,7 @@ async function saveSettingsFromUi() {
       newCustomerTagName: $('newCustomerTag').value.trim() || 'Saruto Mới',
       buyTagName: $('buyTag').value.trim() || 'Mua hàng',
       buyTtsEnabled: $('buyTtsEnabled') ? $('buyTtsEnabled').checked : true,
+      buyTtsExternalEnabled: $('buyTtsExternalEnabled') ? $('buyTtsExternalEnabled').checked : true,
       buyTtsDebounceMs,
       minConfidence: Number($('minConfidence').value || 0.75),
       autoClickEnabled: Boolean(($('autoClickEnabled') && $('autoClickEnabled').checked) || anyRuntimeAutoClickRunning()),
@@ -743,6 +744,8 @@ function renderAiConfigStatus(config, message = '') {
   const parts = [
     message || 'AI config sẵn sàng',
     `Base URL: ${config?.aiBaseUrl || ''} (${source.baseUrl || 'n/a'})`,
+    `Protocol: ${config?.aiProtocol || 'auto'} (${source.protocol || 'n/a'})`,
+    `Transport: ${config?.aiTransport || 'n/a'}`,
     `Model: ${config?.aiModel || ''} (${source.model || 'n/a'})`,
     `API Key: ${config?.aiApiKeyMasked || ''} (${source.apiKey || 'n/a'})`,
     config?.resolvedResponsesUrl ? `Endpoint: ${config.resolvedResponsesUrl}` : ''
@@ -752,6 +755,7 @@ function renderAiConfigStatus(config, message = '') {
 
 async function loadAiConfig() {
   const config = await api('/api/ai/config');
+  $('aiProtocol').value = config.aiProtocol || 'auto';
   $('aiBaseUrl').value = config.aiBaseUrl || '';
   $('aiApiKey').value = config.aiApiKey || '';
   $('aiModel').value = config.aiModel || '';
@@ -763,6 +767,7 @@ async function saveAiConfigFromUi() {
   const config = await api('/api/ai/config', {
     method: 'POST',
     body: JSON.stringify({
+      aiProtocol: $('aiProtocol').value,
       aiBaseUrl: $('aiBaseUrl').value.trim(),
       aiApiKey: $('aiApiKey').value.trim(),
       aiModel: $('aiModel').value.trim()
@@ -776,6 +781,7 @@ async function testAiConfig() {
   const result = await api('/api/ai/test', {
     method: 'POST',
     body: JSON.stringify({
+      aiProtocol: $('aiProtocol').value,
       aiBaseUrl: $('aiBaseUrl').value.trim(),
       aiApiKey: $('aiApiKey').value.trim(),
       aiModel: $('aiModel').value.trim()
@@ -958,12 +964,11 @@ function resolveBotAction(logItem) {
   let a = logItem?.data?.analysis?.action || logItem?.data?.output?.action || '';
   if (a === 'SKIP') a = 'SKIPPED_NON_TEXT';
   if (a === 'TAG_BUY_AND_MARK_UNREAD') a = 'ESCALATED';
-  if (['NEW_CUSTOMER', 'SHORTCUT', 'ESCALATED', 'WAITING_REVIEW', 'TAG_FAILED', 'SKIPPED_NON_TEXT'].includes(a)) return a;
+  if (['NEW_CUSTOMER', 'SHORTCUT', 'ESCALATED', 'TAG_FAILED', 'SKIPPED_NON_TEXT'].includes(a)) return a;
   const m = String(logItem?.message || '');
   if (m.includes('Bỏ qua (không phải text)')) return 'SKIPPED_NON_TEXT';
   if (m.includes('Khách mua hàng/escalate')) return 'ESCALATED';
   if (m.startsWith('Khách mới:')) return 'NEW_CUSTOMER';
-  if (m.includes('Không có shortcut phù hợp')) return 'WAITING_REVIEW';
   if (m.includes('Không gắn được tag')) return 'TAG_FAILED';
   if (m.startsWith('Đã gửi ') || m.startsWith('Đã điền ')) return 'SHORTCUT';
   return null;
@@ -981,7 +986,7 @@ async function computeBotStats() {
   try { logs = await api('/api/logs?limit=800'); } catch (_) { renderBotStats(null); return; }
   const botLogs = (logs || []).filter((l) => l.type === 'BOT');
   const AUTO = new Set(['NEW_CUSTOMER', 'SHORTCUT']);
-  const HUMAN = new Set(['ESCALATED', 'WAITING_REVIEW', 'TAG_FAILED']);
+  const HUMAN = new Set(['ESCALATED', 'TAG_FAILED']);
   let auto = 0, human = 0, skipped = 0;
   const scCount = new Map();
   for (const l of botLogs) {
@@ -1248,12 +1253,38 @@ async function updateDomSummary(tabId = activeWvTab) {
 }
 
 async function getDomHealthSafe(runtime = getActiveBotRuntime()) {
-  try { return await botCallForTab(runtime.tabId, 'getDomHealth'); }
-  catch (error) { return { level: 'FAIL', canTypeReply: false, canSend: false, canTag: false, canMarkUnread: false, missing: [error.message] }; }
+  try {
+    const health = await botCallForTab(runtime.tabId, 'getDomHealth');
+    if (health?.level === 'FAIL') void maybeReportSystemAlert(runtime, 'WARN', `DOM health FAIL: ${missingReason(health, 'unknown')}`);
+    return health;
+  } catch (error) {
+    void maybeReportSystemAlert(runtime, 'ERROR', error?.message || 'Không đọc được DOM health');
+    return { level: 'FAIL', canTypeReply: false, canSend: false, canTag: false, canMarkUnread: false, missing: [error.message] };
+  }
 }
 
 function missingReason(health, fallback) {
   return (health?.missing || []).join(', ') || fallback;
+}
+
+async function maybeReportSystemAlert(runtime, level, message) {
+  const safeLevel = level === 'ERROR' ? 'ERROR' : 'WARN';
+  const text = String(message || '').trim().slice(0, 500);
+  if (!text) return false;
+  const key = `${runtime?.tabId || 'unknown'}:${safeLevel}:${text}`;
+  const now = Date.now();
+  if (now - (systemAlertThrottle.get(key) || 0) < SYSTEM_ALERT_THROTTLE_MS) return false;
+  systemAlertThrottle.set(key, now);
+  try {
+    const pancakeUrl = await getPancakeUrl(runtime?.tabId || activeWvTab);
+    const result = await api('/api/notify/system-alert', {
+      method: 'POST',
+      body: JSON.stringify({ tabId: runtime?.tabId || activeWvTab, level: safeLevel, message: text, pancakeUrl })
+    });
+    return Boolean(result?.telegramSent);
+  } catch (_) {
+    return false;
+  }
 }
 
 function isBlankShortcut(s) { return s == null || String(s).trim() === ''; }
@@ -1310,40 +1341,38 @@ async function ensureBotChatPage(runtime) {
 }
 
 async function postQueueWithRetry(body) {
-  let lastErr = null;
-  for (let attempt = 1; attempt <= 3; attempt++) {
+  let lastError = null;
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
     try {
       await api('/api/review-queue', {
         method: 'POST',
         body: JSON.stringify(body),
         signal: AbortSignal.timeout(10000)
       });
-      return;
-    } catch (err) {
-      lastErr = err;
+      return true;
+    } catch (error) {
+      lastError = error;
     }
   }
-  await log('ERROR', 'QUEUE', `Không enqueue được: ${body.conversationId} - ${lastErr?.message || 'lỗi không xác định'}`);
+  await log('ERROR', 'QUEUE', `Không enqueue được: ${body.conversationId || 'unknown'} - ${lastError?.message || 'lỗi không xác định'}`);
+  return false;
 }
 
-async function enqueueReviewCase({ info, customerName, message, analysis, runtime = getActiveBotRuntime() }) {
-  const conversationId = info?.id || '';
+async function enqueueReviewCase({ info, customerName, message, analysis, suggestedShortcut = '', runtime = getActiveBotRuntime() }) {
+  const conversationId = String(info?.id || '');
   const pancakeUrl = await getPancakeUrl(runtime?.tabId || activeWvTab);
-  const hasValidUrl = /^https?:\/\//.test(pancakeUrl);
-  if (!conversationId && !hasValidUrl) {
-    await log('ERROR', 'QUEUE', 'Không lấy được tham chiếu cuộc trò chuyện, bỏ qua enqueue', { customerName });
-    return;
-  }
-  const body = {
+  const safeUrl = /^https:\/\//i.test(pancakeUrl) ? pancakeUrl : '';
+  if (!conversationId && !safeUrl) return false;
+  return postQueueWithRetry({
     conversationId,
     customerName: customerName || info?.name || '',
     customerMessage: message || '',
     intent: analysis?.intent || '',
     reason: analysis?.reason || 'Bot không tự tin / không hiểu',
-    pancakeUrl: hasValidUrl ? pancakeUrl : '',
+    pancakeUrl: safeUrl,
+    suggestedShortcut,
     addressLookup: analysis?.addressLookup || null
-  };
-  await postQueueWithRetry(body);
+  });
 }
 
 async function processOneConversation(runtime = getActiveBotRuntime()) {
@@ -1373,7 +1402,7 @@ async function processOneConversation(runtime = getActiveBotRuntime()) {
   }
   if (!first) return { ok: true, skipped: true, message: 'Không có khách chưa đọc khả dụng' };
 
-  const coordinator = createClickCoordinator('BOT');
+  const coordinator = createClickCoordinator();
   const processingJob = {
     key,
     conversationId: first.id,
@@ -1423,7 +1452,7 @@ async function processOneConversation(runtime = getActiveBotRuntime()) {
     if (!health.canTag) {
       setRuntimeLastDecision(runtime, 'FAIL_SAFE_TAG', missingReason(health, 'Không tìm thấy tag controls'));
       await log('WARN', 'BOT', prefixRuntime(runtime, `Fail-safe: không gắn tag khách mới cho ${customerName || info.name}`), { message, health, preDecision });
-      await enqueueReviewCase({ info, customerName, message, analysis: { action: 'WAITING_REVIEW', reason: 'DOM không đủ điều kiện gắn tag khách mới', health }, runtime });
+      await enqueueReviewCase({ info, customerName, message, analysis: { intent: 'UNKNOWN', reason: 'DOM không đủ điều kiện gắn tag khách mới', health }, runtime });
       return { ok: true, action: 'WAITING_REVIEW', failSafe: true };
     }
     const tagResult = await call('applyTagByName', preDecision.tagName);   // best-effort
@@ -1440,6 +1469,7 @@ async function processOneConversation(runtime = getActiveBotRuntime()) {
     if (!health.canTypeReply) {
       setRuntimeLastDecision(runtime, 'FAIL_SAFE_REPLY', missingReason(health, 'Không tìm thấy ô reply'));
       await log('WARN', 'BOT', prefixRuntime(runtime, `Fail-safe: không gửi shortcut khách mới cho ${customerName || info.name}`), { message, health, preDecision });
+      await enqueueReviewCase({ info, customerName, message, analysis: { intent: 'UNKNOWN', reason: 'DOM không đủ điều kiện điền shortcut khách mới', health }, suggestedShortcut: preDecision.shortcut, runtime });
       return { ok: true, action: 'WAITING_REVIEW', failSafe: true };
     }
     await call('setReplyText', preDecision.shortcut);
@@ -1447,6 +1477,7 @@ async function processOneConversation(runtime = getActiveBotRuntime()) {
     if (!sendResult?.ok) {
       setRuntimeLastDecision(runtime, 'FAIL_SAFE_SEND', sendResult?.message || 'Không gửi được shortcut');
       await log('WARN', 'BOT', prefixRuntime(runtime, `Fail-safe: ${sendResult?.message || 'không gửi được shortcut'} cho ${customerName || info.name}`), { message, sendResult, preDecision });
+      await enqueueReviewCase({ info, customerName, message, analysis: { intent: 'UNKNOWN', reason: 'Không gửi được shortcut khách mới', sendResult }, suggestedShortcut: preDecision.shortcut, runtime });
       return { ok: true, action: 'WAITING_REVIEW', failSafe: true };
     }
     setRuntimeLastDecision(runtime, preDecision.action);
@@ -1476,6 +1507,33 @@ async function processOneConversation(runtime = getActiveBotRuntime()) {
   if (runtime.tabId === activeWvTab) renderAnalysis(analysis);
 
   const postDecision = window.PDBBotDecision.decideAfterAnalysis({ analysis, settings });
+
+  if (analysis.intent === 'COMPLAINT') {
+    uncertainConversationBlocks.add(key);
+    try {
+      const pancakeUrl = await getPancakeUrl(runtime.tabId);
+      await api('/api/notify/complaint-alert', {
+        method: 'POST',
+        body: JSON.stringify({
+          customerName,
+          conversationId: info.id || first.id || '',
+          message,
+          pancakeUrl,
+          reason: analysis.reason || 'Khách có dấu hiệu khiếu nại'
+        })
+      });
+    } catch (_) {}
+    await enqueueReviewCase({ info, customerName, message, analysis, runtime });
+    setRuntimeLastDecision(runtime, 'COMPLAINT_BLOCKED');
+    await log('WARN', 'BOT', prefixRuntime(runtime, `Đã khóa tự động trả lời khiếu nại: ${customerName || info.name}`), { message, analysis });
+    return { ok: true, action: 'COMPLAINT_BLOCKED', analysis };
+  }
+
+  if (['SKIPPED_NO_ACTION', 'SKIPPED_CONTACT_GATE'].includes(postDecision.action)) {
+    setRuntimeLastDecision(runtime, postDecision.action);
+    await log('INFO', 'BOT', prefixRuntime(runtime, `Bỏ qua: ${customerName || info.name}`), { message, postDecision });
+    return { ok: true, action: postDecision.action, message };
+  }
 
   if (postDecision.action === 'SKIPPED_NON_TEXT') {
     setRuntimeLastDecision(runtime, postDecision.action);
@@ -1516,7 +1574,7 @@ async function processOneConversation(runtime = getActiveBotRuntime()) {
           message,
           tabId: runtime.tabId,
           conversationId: info.id || info.conversationId || ''
-        }, settings);
+        }, { ...settings, ttsEndpoint: `${serverUrl}/api/tts/synthesize`, ttsApiToken: localApiToken });
       }
     } catch (_) {}
     if (postDecision.shouldNotifyBuy) {
@@ -1537,15 +1595,21 @@ async function processOneConversation(runtime = getActiveBotRuntime()) {
   if (postDecision.action === 'WAITING_REVIEW') {
     setRuntimeLastDecision(runtime, postDecision.action);
     await log('WARN', 'BOT', prefixRuntime(runtime, `Không có shortcut phù hợp: ${customerName || info.name}`), { message, analysis, postDecision });
-    await enqueueReviewCase({ info, customerName, message, analysis, runtime });
+    await enqueueReviewCase({ info, customerName, message, analysis, suggestedShortcut: postDecision.shortcut || '', runtime });
     return { ok: true, action: 'WAITING_REVIEW', analysis };
+  }
+
+  if (postDecision.action !== 'ESCALATED' && !postDecision.shortcut) {
+    setRuntimeLastDecision(runtime, 'SKIPPED_NO_ACTION');
+    await log('INFO', 'BOT', prefixRuntime(runtime, `Bỏ qua: không có shortcut phù hợp cho ${customerName || info.name}`), { message, analysis, postDecision });
+    return { ok: true, action: 'SKIPPED_NO_ACTION', analysis };
   }
 
   const health = await getDomHealthSafe(runtime);
   if (!health.canTypeReply) {
     setRuntimeLastDecision(runtime, 'FAIL_SAFE_REPLY', missingReason(health, 'Không tìm thấy ô reply'));
     await log('WARN', 'BOT', prefixRuntime(runtime, `Fail-safe: không điền shortcut cho ${customerName || info.name}`), { message, analysis, health, postDecision });
-    await enqueueReviewCase({ info, customerName, message, analysis: { ...analysis, reason: 'DOM không đủ điều kiện điền shortcut', health }, runtime });
+    await enqueueReviewCase({ info, customerName, message, analysis: { ...analysis, reason: 'DOM không đủ điều kiện điền shortcut', health }, suggestedShortcut: postDecision.shortcut, runtime });
     return { ok: true, action: 'WAITING_REVIEW', failSafe: true, analysis };
   }
 
@@ -1561,6 +1625,7 @@ async function processOneConversation(runtime = getActiveBotRuntime()) {
     if (!sendResult?.ok) {
       setRuntimeLastDecision(runtime, 'FAIL_SAFE_SEND', sendResult?.message || 'Không gửi được shortcut');
       await log('WARN', 'BOT', prefixRuntime(runtime, `Fail-safe: ${sendResult?.message || 'không gửi được shortcut'} cho ${customerName || info.name}`), { message, analysis, sendResult, postDecision });
+      await enqueueReviewCase({ info, customerName, message, analysis: { ...analysis, reason: 'Không gửi được shortcut', sendResult }, suggestedShortcut: postDecision.shortcut, runtime });
       return { ok: true, action: 'WAITING_REVIEW', failSafe: true, analysis };
     }
     await recordExample(message, postDecision.shortcut, analysis.intent || '');
@@ -1568,7 +1633,7 @@ async function processOneConversation(runtime = getActiveBotRuntime()) {
     await log('SUCCESS', 'BOT', prefixRuntime(runtime, `Đã gửi ${postDecision.shortcut} cho ${customerName || info.name}`), { message, analysis, postDecision });
   } else {
     setRuntimeLastDecision(runtime, postDecision.action);
-    await log('INFO', 'BOT', prefixRuntime(runtime, `Đã điền ${postDecision.shortcut}, chờ duyệt`), { message, analysis, postDecision });
+    await log('INFO', 'BOT', prefixRuntime(runtime, `Đã điền ${postDecision.shortcut}`), { message, analysis, postDecision });
   }
   return { ok: true, action: 'SHORTCUT', analysis };
   })();
@@ -1620,7 +1685,7 @@ async function processOneAutoClick(runtime = getActiveBotRuntime()) {
   const first = unread.find((candidate) => !wasConversationProcessedAnywhere(makeDedupeKey(candidate)));
   if (!first) return { ok: true, skipped: true, action: 'SKIPPED_RECENT' };
   const key = makeDedupeKey(first);              // Req 7.1
-  const coordinator = createClickCoordinator('AUTOCLICK');
+  const coordinator = createClickCoordinator();
   const processingJob = {
     key,
     conversationId: first.id,
@@ -1663,7 +1728,7 @@ async function processOneAutoClick(runtime = getActiveBotRuntime()) {
   if (!health.canTypeReply) {
     setRuntimeLastDecision(runtime, 'AUTOCLICK_FAIL_SAFE_REPLY', missingReason(health, 'Không tìm thấy ô reply'));
     await log('WARN', 'AUTOCLICK', prefixRuntime(runtime, `Fail-safe: không gửi ${shortcut} cho ${customerName || info.name}`), { health, message: info.snippet });
-    return { ok: true, action: 'WAITING_REVIEW', failSafe: true };
+    return { ok: true, action: 'SKIPPED_NO_ACTION', failSafe: true };
   }
 
   // Gắn thẻ ĐÚNG 1 LẦN (không retry); lỗi → coi như thất bại nhưng vẫn gửi (Req 5.1, 5.2, 5.3).
@@ -1766,35 +1831,13 @@ async function botLoop(runtime) {
   toast(`${getRuntimeLabel(runtime)} đã dừng`);
 }
 
-async function enqueueTechnicalReview({ conversationId, tabId, code, stage }) {
-  const safeCode = /^[A-Z0-9_]{1,64}$/.test(String(code || '')) ? String(code) : 'ACTION_UNCERTAIN';
-  const safeStage = /^(clickConversationById|setReplyText|clickSendButton|applyTagByName|markCurrentConversationUnread)$/.test(String(stage || ''))
-    ? String(stage)
-    : 'action';
-  const safeTabId = tabId === 'bot1' || tabId === 'bot2' ? tabId : '';
-  await postQueueWithRetry({
-    conversationId: String(conversationId || '').slice(0, 200),
-    customerName: '',
-    customerMessage: '',
-    intent: 'AUTOMATION_REVIEW',
-    reason: `Automation ${safeCode} at ${safeStage}`,
-    pancakeUrl: '',
-    technical: {
-      tabId: safeTabId,
-      code: safeCode,
-      stage: safeStage
-    }
-  });
-}
-
-function createClickCoordinator(cacheMode) {
+function createClickCoordinator() {
   return window.PDBConversationProcessing.createConversationProcessingCoordinator({
     claims: window.PDBConversationClaims,
     isProcessed: (key) => wasConversationProcessedAnywhere(key),
     commitProcessed: (key) => rememberConversationProcessedEverywhere(key),
     isConversationBlocked: (key) => uncertainConversationBlocks.has(key),
-    blockConversation: (key) => uncertainConversationBlocks.add(key),
-    addReviewItem: (item) => enqueueTechnicalReview({ ...item, cacheMode })
+    blockConversation: (key) => uncertainConversationBlocks.add(key)
   });
 }
 
@@ -1974,6 +2017,44 @@ async function stopBot(runtime = getActiveBotRuntime()) {
   syncLegacyRuntimeAliases(runtime);
   updateAutomationActivity();
   refreshActiveTabRuntimeUi();
+}
+
+async function sendReviewShortcut(reviewCase = {}) {
+  const shortcut = String(reviewCase.suggestedShortcut || '').trim();
+  const conversationId = String(reviewCase.conversationId || '').trim();
+  const runtime = getActiveBotRuntime();
+  if (!runtime || !/^\/\d+$/.test(shortcut) || !conversationId) return false;
+  try {
+    await ensureBotChatPage(runtime);
+    await botCallForTab(runtime.tabId, 'clickConversationById', conversationId);
+    await sleep(500);
+    await botCallForTab(runtime.tabId, 'setReplyText', shortcut);
+    const result = await botCallForTab(runtime.tabId, 'clickSendButton');
+    if (!result?.ok) return false;
+    await log('SUCCESS', 'BOT', prefixRuntime(runtime, `Telegram duyệt gửi ${shortcut}: ${reviewCase.customerName || conversationId}`));
+    return true;
+  } catch (error) {
+    await log('WARN', 'BOT', prefixRuntime(runtime, `Telegram duyệt gửi thất bại: ${error?.message || String(error)}`));
+    return false;
+  }
+}
+
+function initTelegramControl() {
+  window.pancakeDesktop?.onTelegramControl?.((control = {}) => {
+    const action = String(control.action || '');
+    if (action === 'start_bot') return startBot().catch((error) => toast(`Telegram start bot lỗi: ${error.message}`, 5000));
+    if (action === 'stop_bot') return stopBot().catch((error) => toast(`Telegram stop bot lỗi: ${error.message}`, 5000));
+    if (action === 'autosend') {
+      if ($('autoSend')) $('autoSend').checked = Boolean(control.enabled);
+      return saveSettingsFromUi().catch((error) => toast(`Telegram autosend lỗi: ${error.message}`, 5000));
+    }
+    if (action === 'send_review_shortcut') {
+      return sendReviewShortcut(control.reviewCase)
+        .then((ok) => window.pancakeDesktop?.reportTelegramReviewResult?.(control.requestId, ok))
+        .catch(() => window.pancakeDesktop?.reportTelegramReviewResult?.(control.requestId, false));
+    }
+    return undefined;
+  });
 }
 
 async function toggleBotFromRail() {
@@ -2268,131 +2349,6 @@ function activeWebview() {
   return getTab(activeWvTab).webview;
 }
 
-// --- Review queue (admin review) UI ---
-function showReviewQueueError(msg) {
-  const el = $('reviewQueueError');
-  if (!el) return;
-  el.textContent = msg;
-  el.classList.remove('hidden');
-}
-
-function hideReviewQueueError() {
-  const el = $('reviewQueueError');
-  if (el) el.classList.add('hidden');
-}
-
-async function loadReviewQueue() {
-  try {
-    const data = await api('/api/review-queue');
-    reviewQueueCache = (data.items || [])
-      .filter((x) => x.status === 'pending')
-      .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)); // newest first (Req 2.8)
-    renderReviewQueue(reviewQueueCache);
-    hideReviewQueueError();
-  } catch (_) {
-    showReviewQueueError('Không tải được hàng đợi'); // keep stale cache (Req 2.9)
-  }
-}
-
-function renderReviewQueue(items) {
-  const list = $('reviewQueueList');
-  const empty = $('reviewQueueEmpty');
-  const count = Array.isArray(items) ? items.length : 0;
-  $('reviewQueueBadge').textContent = count;
-  if ($('miniQueueBadge')) $('miniQueueBadge').textContent = count;
-  $('reviewQueueCount').textContent = count;
-
-  if (!count) {
-    if (empty) empty.classList.remove('hidden');
-    if (list) list.innerHTML = '';
-    return;
-  }
-  if (empty) empty.classList.add('hidden');
-
-  list.innerHTML = items.map((item) => {
-    const name = escapeHtml(item.customerName || '(không tên)');
-    const rawMsg = String(item.customerMessage || '');
-    const msg = escapeHtml(rawMsg.length > 140 ? rawMsg.slice(0, 140) + '…' : rawMsg);
-    const reason = escapeHtml(item.reason || '');
-    let when = '';
-    try { when = escapeHtml(new Date(item.createdAt).toLocaleString()); } catch (_) {}
-    const id = escapeHtml(item.id || '');
-    const conv = escapeHtml(item.conversationId || '');
-    const url = escapeHtml(item.pancakeUrl || '');
-    const lookup = item.addressLookup || null;
-    const mapsUrl = lookup?.googleMapsUrl ? escapeHtml(lookup.googleMapsUrl) : '';
-    const addressBlock = mapsUrl ? `
-      <div class="rq-address">
-        <div><b>Địa chỉ:</b> ${escapeHtml(lookup.rawAddress || lookup.query || '')}</div>
-        <div><b>Độ chắc chắn:</b> ${escapeHtml(lookup.confidence || 'medium')}</div>
-        ${lookup.note ? `<div>${escapeHtml(lookup.note)}</div>` : ''}
-        <a class="btn small ghost" href="${mapsUrl}" target="_blank" rel="noreferrer">Mở Google Maps</a>
-      </div>` : '';
-    return `<li class="rq-item">
-      <div class="rq-item-name">${name}</div>
-      <div class="rq-item-msg">${msg}</div>
-      <div class="rq-item-reason">${reason}</div>
-      ${addressBlock}
-      <div class="rq-item-time">${when}</div>
-      <div class="actions">
-        <button class="btn small rq-open" data-id="${id}" data-conv="${conv}" data-url="${url}">Mở</button>
-        <button class="btn small rq-done" data-id="${id}">Hoàn tất</button>
-        <button class="btn small danger rq-del" data-id="${id}">Xóa</button>
-      </div>
-    </li>`;
-  }).join('');
-}
-
-function getReviewTargetTabId() {
-  return getTab(activeWvTab).botCapable ? activeWvTab : 'bot1';
-}
-
-async function navigateToConversation(item, tabId = getReviewTargetTabId()) {
-  const tab = getTab(tabId);
-  if (/^https?:\/\//.test(item.pancakeUrl || '')) {   // Req 3.3
-    navigateWebview(tab, item.pancakeUrl);
-    return true;
-  }
-  if (item.conversationId) {                            // Req 3.4
-    try { await botCallForTab(tab.id, 'clickConversationById', item.conversationId); return true; }
-    catch (_) { return false; }
-  }
-  return false;                                         // Req 3.5
-}
-
-async function openReviewItem(item) {
-  const tabId = getReviewTargetTabId();
-  switchWebviewTab(tabId);                              // Req 3.1
-  const ok = await navigateToConversation(item, tabId);
-  if (!ok) toast('Không mở được cuộc trò chuyện', 4000); // Req 3.5/3.6, item stays pending
-}
-
-async function markReviewDone(id) {
-  await api(`/api/review-queue/${id}/done`, { method: 'POST' });
-  await loadReviewQueue();
-}
-
-async function deleteReviewItemUI(id) {
-  await api(`/api/review-queue/${id}`, { method: 'DELETE' });
-  await loadReviewQueue();
-}
-
-async function clearDoneReview() {
-  await api('/api/review-queue/clear-done', { method: 'POST' });
-  await loadReviewQueue();
-}
-
-function startReviewQueuePolling() {
-  stopReviewQueuePolling();
-  loadReviewQueue();                                    // refresh immediately (Req 2.1)
-  reviewQueueTimer = setInterval(loadReviewQueue, 5000); // poll every 5s (Req 2.5)
-}
-
-function stopReviewQueuePolling() {
-  if (reviewQueueTimer) clearInterval(reviewQueueTimer);
-  reviewQueueTimer = null;
-}
-
 function bindTabs() {
   const tabsBar = document.querySelector('.tabs');
 
@@ -2402,9 +2358,6 @@ function bindTabs() {
       document.querySelectorAll('.tab-panel').forEach((p) => p.classList.remove('active'));
       btn.classList.add('active');
       $(btn.dataset.tab).classList.add('active');
-      // Toggle review-queue polling based on which tab is active.
-      if (btn.dataset.tab === 'reviewQueuePanel') startReviewQueuePolling();
-      else stopReviewQueuePolling();
       // Cập nhật bảng shortcut khi mở tab Gợi ý.
       if (btn.dataset.tab === 'ai') renderShortcutPalette();
       // Tính lại thống kê bot khi mở tab Tổng quan.
@@ -2491,7 +2444,6 @@ function bindUi() {
   if ($('miniAutoReplyPreviewBtn')) $('miniAutoReplyPreviewBtn').addEventListener('click', async () => {
     try { await toggleAutoReplyPreviewFromRail(); } catch (e) { toast(e.message, 5000); }
   });
-  if ($('miniQueueBtn')) $('miniQueueBtn').addEventListener('click', () => openPanelTab('reviewQueuePanel'));
   if ($('miniSuggestBtn')) $('miniSuggestBtn').addEventListener('click', () => openPanelTab('ai'));
   if ($('themeBtn')) $('themeBtn').addEventListener('click', toggleTheme);
   document.querySelectorAll('[data-open-devtools]').forEach((button) => {
@@ -2599,26 +2551,6 @@ function bindUi() {
   $('templateBtn').addEventListener('click', () => window.pancakeDesktop.openExternal(`${serverUrl}/api/shortcuts/template`));
   $('clearLogsBtn').addEventListener('click', async () => { await api('/api/logs/clear', { method: 'POST' }); await loadLogs(); });
   if ($('botStatsRefresh')) $('botStatsRefresh').addEventListener('click', computeBotStats);
-
-  // Review queue: refresh / clear-done + delegated row actions
-  if ($('reviewQueueRefresh')) $('reviewQueueRefresh').addEventListener('click', loadReviewQueue);
-  if ($('reviewQueueClearDone')) $('reviewQueueClearDone').addEventListener('click', async () => {
-    try { await clearDoneReview(); toast('Đã xóa mục đã xong'); } catch (e) { toast(e.message); }
-  });
-  if ($('reviewQueueList')) $('reviewQueueList').addEventListener('click', async (e) => {
-    const btn = e.target.closest('button');
-    if (!btn) return;
-    const id = btn.dataset.id;
-    try {
-      if (btn.classList.contains('rq-open')) {
-        await openReviewItem({ pancakeUrl: btn.dataset.url, conversationId: btn.dataset.conv });
-      } else if (btn.classList.contains('rq-done')) {
-        await markReviewDone(id);
-      } else if (btn.classList.contains('rq-del')) {
-        await deleteReviewItemUI(id);
-      }
-    } catch (err) { toast(err.message); }
-  });
 
   document.querySelectorAll('[data-domtest]').forEach((btn) => {
     btn.addEventListener('click', async () => runDomTest(btn.dataset.domtest));
@@ -2871,6 +2803,7 @@ async function init() {
   initTheme();
   bindTabs();
   bindUi();
+  initTelegramControl();
   const env = await window.pancakeDesktop.getEnv();
   serverUrl = env.serverUrl || serverUrl;
   localApiToken = String(env.apiToken || '');

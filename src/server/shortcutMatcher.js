@@ -26,13 +26,13 @@ function suggestByRole(intent, role, items, reason) {
   if (!item) {
     return {
       intent,
-      action: 'WAITING_REVIEW',
+      action: 'SKIP',
       bestShortcut: null,
       confidence: 0,
       reason: `Không tìm thấy shortcut cho vai trò ${role}`,
       topSuggestions: [],
       shouldSend: false,
-      shouldEscalate: true
+      shouldEscalate: false
     };
   }
   return {
@@ -134,10 +134,13 @@ function keywordSuggest(customerMessage, shortcuts) {
     };
   }
   if (cls.intent === 'COMPLAINT') {
-    return { intent: cls.intent, action: 'WAITING_REVIEW', bestShortcut: null, confidence: 0.8, reason: 'Tin nhắn có dấu hiệu khiếu nại, nên chờ người xử lý', topSuggestions: [], shouldSend: false, shouldEscalate: true };
+    return { intent: cls.intent, action: 'SKIP', bestShortcut: null, confidence: 0, reason: 'Complaint requires manual handling', topSuggestions: [], shouldSend: false, shouldEscalate: false };
   }
   if (cls.addressRole === 'STORE_LOCATION_REQUEST') {
     return suggestByRole(cls.intent, 'STORE_LOCATION', items, 'Khách hỏi địa chỉ hoặc vị trí nhà thuốc');
+  }
+  if (cls.contactState === 'INCOMPLETE_CONTACT') {
+    return { intent: cls.intent, action: 'SKIP', bestShortcut: null, confidence: 0, reason: 'Contact labels are incomplete', topSuggestions: [], shouldSend: false, shouldEscalate: false };
   }
   if (cls.contactState === 'PHONE_ONLY') {
     return suggestByRole(cls.intent, 'REQUEST_CUSTOMER_ADDRESS', items, 'Khách đã có SĐT, cần xin địa chỉ nhận hàng đầy đủ');
@@ -165,13 +168,13 @@ function keywordSuggest(customerMessage, shortcuts) {
   const best = topSuggestions[0] || null;
   return {
     intent: cls.intent,
-    action: best ? 'SUGGEST_SHORTCUT' : 'WAITING_REVIEW',
+    action: best ? 'SUGGEST_SHORTCUT' : 'SKIP',
     bestShortcut: best ? best.shortcut : null,
     confidence: best ? best.confidence : 0,
     reason: best ? best.reason : 'Không tìm thấy shortcut phù hợp bằng keyword matcher',
     topSuggestions,
     shouldSend: false,
-    shouldEscalate: !best
+    shouldEscalate: false
   };
 }
 

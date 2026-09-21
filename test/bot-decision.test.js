@@ -145,10 +145,9 @@ test('bot decision: skip or non-text analysis is skipped without review side eff
   for (const analysis of [{ action: 'SKIP' }, { intent: 'NON_TEXT' }]) {
     const decision = decideAfterAnalysis({ analysis, settings: {} });
 
-    assert.equal(decision.action, 'SKIPPED_NON_TEXT');
+    assert.equal(decision.action, analysis.intent === 'NON_TEXT' ? 'SKIPPED_NON_TEXT' : 'SKIPPED_NO_ACTION');
     assert.equal(decision.shouldApplyBuyTag, false);
     assert.equal(decision.shouldMarkUnread, false);
-    assert.equal(decision.shouldEnqueueReview, false);
     assert.equal(decision.shouldFillShortcut, false);
     assert.equal(decision.shouldAttemptAutoSend, false);
   }
@@ -158,7 +157,14 @@ test('bot decision: buy/contact escalation applies buy tag, marks unread, notifi
   const decision = decideAfterAnalysis({
     analysis: {
       action: 'TAG_BUY_AND_MARK_UNREAD',
-      contactInfo: { phone: '0912345678' }
+      contactInfo: {
+        phone: '0912345678',
+        address: 'xã bình minh huyện thanh oai tỉnh thanh hóa',
+        phoneValid: true,
+        addressValid: true,
+        phoneLabel: true,
+        addressLabel: true
+      }
     },
     settings: { buyTagName: 'Mua hàng' }
   });
@@ -168,7 +174,6 @@ test('bot decision: buy/contact escalation applies buy tag, marks unread, notifi
   assert.equal(decision.shouldApplyBuyTag, true);
   assert.equal(decision.shouldMarkUnread, true);
   assert.equal(decision.shouldNotifyBuy, true);
-  assert.equal(decision.shouldEnqueueReview, true);
 });
 
 test('bot decision: buy/contact escalation without contact does not notify buy', () => {
@@ -177,16 +182,15 @@ test('bot decision: buy/contact escalation without contact does not notify buy',
     settings: { buyTagName: 'Mua hàng' }
   });
 
-  assert.equal(decision.action, 'ESCALATED');
-  assert.equal(decision.shouldApplyBuyTag, true);
-  assert.equal(decision.shouldMarkUnread, true);
+  assert.equal(decision.action, 'SKIPPED_CONTACT_GATE');
+  assert.equal(decision.shouldApplyBuyTag, false);
+  assert.equal(decision.shouldMarkUnread, false);
   assert.equal(decision.shouldNotifyBuy, false);
-  assert.equal(decision.shouldEnqueueReview, true);
 });
 
-test('bot decision: missing best shortcut goes to review queue', () => {
+test('bot decision: unsupported analysis action enters review queue', () => {
   const decision = decideAfterAnalysis({
-    analysis: { action: 'WAITING_REVIEW', bestShortcut: null },
+    analysis: { action: 'UNSUPPORTED_ACTION', bestShortcut: '/2' },
     settings: {}
   });
 

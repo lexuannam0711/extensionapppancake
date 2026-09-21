@@ -73,6 +73,7 @@ const DEFAULT_SETTINGS = {
   newCustomerTagName: 'Saruto Mới',
   buyTagName: 'Mua hàng',
   buyTtsEnabled: true,
+  buyTtsExternalEnabled: true,
   buyTtsDebounceMs: 1500,
   allowShortcutAfterBuyIntent: false,
   processDelayMs: 3000,
@@ -83,7 +84,8 @@ const DEFAULT_SETTINGS = {
   theme: 'light',
   aiBaseUrl: '',
   aiApiKey: '',
-  aiModel: ''
+  aiModel: '',
+  aiProtocol: 'auto'
 };
 
 async function getSettings() {
@@ -132,6 +134,7 @@ async function clearLogs() {
 }
 
 const EXAMPLES_MAX = 500;
+const REVIEW_QUEUE_MAX = 500;
 
 async function getExamples() {
   const data = await readJson('examples.json', { items: [] });
@@ -187,113 +190,117 @@ async function clearExamples() {
   return { items: [] };
 }
 
-const REVIEW_QUEUE_MAX = 500;
-
 async function getReviewQueue() {
   const data = await readJson('review-queue.json', { items: [] });
-  data.items = Array.isArray(data.items) ? data.items : [];
-  return data;
+  return { items: Array.isArray(data.items) ? data.items : [] };
 }
 
 function normalizeAddressLookup(raw) {
   if (!raw || typeof raw !== 'object') return null;
-  const str = (x) => String(x == null ? '' : x).trim();
-  const googleMapsUrl = str(raw.googleMapsUrl);
-  if (!googleMapsUrl) return null;
+  const value = (item) => String(item == null ? '' : item).trim();
+  const googleMapsUrl = value(raw.googleMapsUrl);
+  if (!/^https:\/\//i.test(googleMapsUrl)) return null;
   return {
-    rawAddress: str(raw.rawAddress),
-    query: str(raw.query),
+    rawAddress: value(raw.rawAddress),
+    query: value(raw.query),
     googleMapsUrl,
-    confidence: str(raw.confidence),
-    note: str(raw.note)
+    confidence: value(raw.confidence),
+    note: value(raw.note)
   };
 }
 
 function normalizeQueueInput(raw) {
-  const r = raw || {};
-  const str = (x) => String(x == null ? '' : x).trim();
+  const value = (item) => String(item == null ? '' : item).trim().slice(0, 2000);
   return {
-    customerName: str(r.customerName),
-    customerMessage: str(r.customerMessage),
-    intent: str(r.intent),
-    reason: str(r.reason),
-    pancakeUrl: str(r.pancakeUrl),
-    conversationId: str(r.conversationId),
-    addressLookup: normalizeAddressLookup(r.addressLookup)
+    customerName: value(raw?.customerName).slice(0, 200),
+    customerMessage: value(raw?.customerMessage),
+    intent: value(raw?.intent).slice(0, 80),
+    reason: value(raw?.reason).slice(0, 500),
+    pancakeUrl: value(raw?.pancakeUrl).slice(0, 1000),
+    conversationId: value(raw?.conversationId).slice(0, 200),
+    suggestedShortcut: /^\/\d+$/.test(String(raw?.suggestedShortcut || '').trim()) ? String(raw.suggestedShortcut).trim() : '',
+    addressLookup: normalizeAddressLookup(raw?.addressLookup)
   };
 }
 
-async function addOrUpdateReviewItem(entry) {
-  const input = normalizeQueueInput(entry);
+async function addOrUpdateReviewItem(raw) {
+  const input = normalizeQueueInput(raw);
   const data = await getReviewQueue();
   const now = new Date().toISOString();
-
-  // Dedupe: merge into existing pending item with same conversationId (Req 1.7).
-  if (input.conversationId) {
-    const existing = data.items.find(
-      (x) => x.status === 'pending' && x.conversationId === input.conversationId
-    );
-    if (existing) {
-      existing.customerMessage = input.customerMessage;
-      existing.intent = input.intent;
-      existing.reason = input.reason;
-      existing.pancakeUrl = input.pancakeUrl;
-      existing.addressLookup = input.addressLookup || existing.addressLookup || null;
-      existing.updatedAt = now;
-      await writeJson('review-queue.json', { items: data.items });
-      return { item: existing, updated: true };
-    }
+  const existingIndex = input.conversationId
+    ? data.items.findIndex((item) => item.status === 'pending' && item.conversationId === input.conversationId)
+    : -1;
+  if (existingIndex >= 0) {
+    const previous = data.items[existingIndex];
+    const item = {
+      ...previous,
+      ...input,
+      addressLookup: input.addressLookup || previous.addressLookup || null,
+      updatedAt: now
+    };
+    const items = data.items.map((entry, index) => index === existingIndex ? item : entry);
+    await writeJson('review-queue.json', { items });
+    return { item, updated: true };
   }
-
   const item = {
     id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
-    conversationId: input.conversationId,
-    customerName: input.customerName,
-    customerMessage: input.customerMessage,
-    intent: input.intent,
-    reason: input.reason,
-    pancakeUrl: input.pancakeUrl,
-    addressLookup: input.addressLookup,
+    ...input,
     status: 'pending',
     createdAt: now,
     updatedAt: now,
     completedAt: null
   };
-  data.items.unshift(item);
-  // Trim to REVIEW_QUEUE_MAX, dropping oldest createdAt (newest are at the front). (Req 5.6)
-  const items = data.items.slice(0, REVIEW_QUEUE_MAX);
-  await writeJson('review-queue.json', { items });
+  await writeJson('review-queue.json', { items: [item, ...data.items].slice(0, REVIEW_QUEUE_MAX) });
   return { item, updated: false };
 }
 
 async function markReviewItemDone(id) {
   const data = await getReviewQueue();
-  const item = data.items.find((x) => x.id === id);
-  if (!item) return null;
-  if (item.status === 'done') return item; // idempotent: keep original completedAt (Req 4.6)
+  const index = data.items.findIndex((item) => item.id === String(id));
+  if (index < 0) return null;
+  const current = data.items[index];
+  if (current.status === 'done') return current;
+  const item = { ...current, status: 'done', completedAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+  await writeJson('review-queue.json', { items: data.items.map((entry, itemIndex) => itemIndex === index ? item : entry) });
+  return item;
+}
+
+async function claimReviewItemSend(id) {
+  const data = await getReviewQueue();
+  const index = data.items.findIndex((item) => item.id === String(id));
+  if (index < 0) return null;
+  const current = data.items[index];
+  if (current.status === 'done' || current.status === 'sending') return null;
   const now = new Date().toISOString();
-  item.status = 'done';
-  item.completedAt = now;
-  item.updatedAt = now;
-  await writeJson('review-queue.json', { items: data.items });
+  const item = { ...current, status: 'sending', sendAttemptedAt: now, updatedAt: now };
+  await writeJson('review-queue.json', { items: data.items.map((entry, itemIndex) => itemIndex === index ? item : entry) });
+  return item;
+}
+
+async function releaseReviewItemSend(id) {
+  const data = await getReviewQueue();
+  const index = data.items.findIndex((item) => item.id === String(id));
+  if (index < 0) return null;
+  const current = data.items[index];
+  if (current.status !== 'sending') return current;
+  const item = { ...current, status: 'pending', sendAttemptedAt: null, updatedAt: new Date().toISOString() };
+  await writeJson('review-queue.json', { items: data.items.map((entry, itemIndex) => itemIndex === index ? item : entry) });
   return item;
 }
 
 async function deleteReviewItem(id) {
   const data = await getReviewQueue();
-  const exists = data.items.some((x) => x.id === id);
-  if (!exists) return null; // route returns 404 (Req 4.4)
-  const items = data.items.filter((x) => x.id !== id);
+  const items = data.items.filter((item) => item.id !== String(id));
+  if (items.length === data.items.length) return null;
   await writeJson('review-queue.json', { items });
   return { items };
 }
 
 async function clearDoneReviewItems() {
   const data = await getReviewQueue();
-  const items = data.items.filter((x) => x.status !== 'done');
-  const removed = data.items.length - items.length;
+  const items = data.items.filter((item) => item.status !== 'done');
   await writeJson('review-queue.json', { items });
-  return { items, removed };
+  return { items, removed: data.items.length - items.length };
 }
 
 module.exports = {
@@ -319,6 +326,8 @@ module.exports = {
   getReviewQueue,
   normalizeQueueInput,
   addOrUpdateReviewItem,
+  claimReviewItemSend,
+  releaseReviewItemSend,
   markReviewItemDone,
   deleteReviewItem,
   clearDoneReviewItems

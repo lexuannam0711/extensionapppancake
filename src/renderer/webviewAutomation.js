@@ -31,7 +31,7 @@
 
   // Actions safe to repeat: replaying them lands the page in the same state as
   // a single successful call, so a transient guest-view failure can be retried
-  // and does not need to stop the bot for review.
+  // and does not need to stop the bot for an uncertain state.
   //   clickConversationById - reopens the same conversation
   //   setReplyText          - rewrites the composer with the same shortcut
   //   applyTagByName        - guards on `alreadyApplied` before clicking

@@ -84,12 +84,12 @@ test('v4 safety: store location shortcut is selected dynamically, not by shortcu
   assert.equal(result.shouldSend, false);
 });
 
-test('v4 safety: missing semantic shortcut waits for review', () => {
+test('v4 safety: missing semantic shortcut is skipped', () => {
   const result = keywordSuggest('xin địa chỉ nhà thuốc', shortcuts.filter((item) => item.shortcut !== '/10'));
 
-  assert.equal(result.action, 'WAITING_REVIEW');
+  assert.equal(result.action, 'SKIP');
   assert.equal(result.bestShortcut, null);
-  assert.equal(result.shouldEscalate, true);
+  assert.equal(result.shouldEscalate, false);
 });
 
 test('v4 safety: keywordSuggest only returns shortcuts from imported list', () => {

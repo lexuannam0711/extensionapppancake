@@ -9,9 +9,6 @@ function foldVietnameseText(text) {
     .replace(/đ/g, 'd');
 }
 
-const MAX_CUSTOMER_TAGS = 50;
-const MAX_CUSTOMER_TAG_LENGTH = 100;
-
 function normalizeVietnameseText(text) {
   return String(text || '')
     .normalize('NFD')
@@ -20,66 +17,6 @@ function normalizeVietnameseText(text) {
     .toLowerCase()
     .replace(/\s+/g, ' ')
     .trim();
-}
-
-function sanitizeCustomerTags(tags) {
-  if (!Array.isArray(tags)) return [];
-  return tags
-    .slice(0, MAX_CUSTOMER_TAGS)
-    .filter((tag) => typeof tag === 'string')
-    .map((tag) => tag.trim().slice(0, MAX_CUSTOMER_TAG_LENGTH))
-    .filter(Boolean);
-}
-
-function getEligibleReturningCustomerTags(tags) {
-  return sanitizeCustomerTags(tags).filter((tag) => {
-    const normalized = normalizeVietnameseText(tag);
-    return normalized.startsWith('nhan saruto') ||
-      normalized.startsWith('da nhan') ||
-      normalized.includes('trong');
-  });
-}
-
-function includesNormalizedPhrase(text, phrase) {
-  return ` ${text} `.includes(` ${phrase} `);
-}
-
-function getRepurchaseBlocker(text, { ignoreCourtesy = false } = {}) {
-  const normalized = normalizeVietnameseText(text).replace(/[^a-z0-9]+/g, ' ').trim();
-  const complaintMarkers = [
-    'khieu nai', 'lua', 'hoan tien', 'khong nhan', 'hang sai', 'sai hang',
-    'hang loi', 'bi loi', 'te', 'buc', 'chui'
-  ];
-  if (complaintMarkers.some((marker) => includesNormalizedPhrase(normalized, marker))) return 'COMPLAINT';
-
-  const refusalMarkers = [
-    'khong mua', 'khong lay', 'khong can', 'khong dat', 'chua mua',
-    'de sau', 'huy', 'dung gui', 'dung ship', 'thoi', 'suy nghi'
-  ];
-  if (refusalMarkers.some((marker) => includesNormalizedPhrase(normalized, marker))) return 'REFUSAL';
-  return !ignoreCourtesy && includesNormalizedPhrase(normalized, 'cam on') ? 'REFUSAL' : null;
-}
-
-function detectExplicitRepurchase(text) {
-  if (getRepurchaseBlocker(text, { ignoreCourtesy: true })) return false;
-  const normalized = normalizeVietnameseText(text).replace(/[^a-z0-9]+/g, ' ').trim();
-  if (!normalized) return false;
-
-  const shortConfirmation = /^(?:ok|oke|oki|okay)(?:\s+(?:em|nhe))?$/.test(normalized);
-  const verbThenRepeat = /\b(?:mua|lay|gui|ship|giao|dat)(?:\s+[a-z0-9]+){0,4}\s+(?:lai|them|nua|tiep)\b/;
-  const repeatThenVerb = /\b(?:lai|them|nua|tiep)(?:\s+[a-z0-9]+){0,4}\s+(?:mua|lay|gui|ship|giao|dat)\b/;
-  const hasQuantityAndUnit = /\b(?:\d{1,3}|mot|hai|ba|bon|tu|nam|sau|bay|tam|chin|muoi)\s*(?:hop|lo|chai|goi|bo)\b/.test(normalized);
-  const directQuantityOrder = /\bcho(?:\s+(?:chi|anh|em|toi|minh)){0,2}\s+(?:\d{1,3}|mot|hai|ba|bon|tu|nam|sau|bay|tam|chin|muoi)\s*(?:hop|lo|chai|goi|bo)(?:\s+(?:nua|nhe|di))?$/.test(normalized);
-  const quantityRequest = hasQuantityAndUnit && (
-    /\b(?:mua|lay|gui|ship|giao|dat)\b/.test(normalized) ||
-    /\b(?:them|nua|tiep)\b/.test(normalized)
-  ) || directQuantityOrder;
-  const oldAddress = /\b(?:giao|gui|ship)\b/.test(normalized) &&
-    /\b(?:dia chi|cho|noi)\s+cu\b/.test(normalized);
-  const agreedSend = /^(?:(?:u|uh|vang|duoc)(?:\s+em)?|(?:em|e))\s+(?:gui|ship|giao)\s+di$/.test(normalized);
-
-  return shortConfirmation || verbThenRepeat.test(normalized) || repeatThenVerb.test(normalized) ||
-    quantityRequest || oldAddress || agreedSend;
 }
 
 function includesVietnameseKeyword(text, keywords) {
@@ -92,6 +29,8 @@ const ADDRESS_MAIN_MARKERS = ['thôn', 'xã', 'phường', 'thị trấn', 'huy�
 const ADDRESS_EXPLICIT_MARKERS = ['địa chỉ', 'đ/c', 'đc '];
 const ADDRESS_CITY_ABBREVIATIONS = ['hn', 'hcm', 'tphcm', 'sg', 'hp'];
 const CENTRAL_CITY_NAMES = ['ha noi', 'ho chi minh', 'hai phong', 'da nang', 'can tho'];
+const PHONE_LABEL_MARKERS = ['số điện thoại', 'sđt', 'sdt'];
+const ADDRESS_LABEL_MARKERS = ['địa chỉ'];
 
 function escapeRegex(text) {
   return String(text).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -104,6 +43,19 @@ function hasAddressCityAbbreviation(text) {
 
 function getMainAddressMarkerHits(text) {
   return ADDRESS_MAIN_MARKERS.filter((marker) => includesVietnameseKeyword(text, [marker]));
+}
+
+function hasLabeledPhrase(text, phrases) {
+  const normalized = normalizeVietnameseText(stripUrls(text)).replace(/[^a-z0-9]+/g, ' ').trim();
+  return phrases.some((phrase) => ` ${normalized} `.includes(` ${normalizeVietnameseText(phrase)} `));
+}
+
+function hasPhoneLabel(text) {
+  return hasLabeledPhrase(text, PHONE_LABEL_MARKERS);
+}
+
+function hasAddressLabel(text) {
+  return hasLabeledPhrase(text, ADDRESS_LABEL_MARKERS);
 }
 
 function hasExplicitAddressMarker(text) {
@@ -271,11 +223,18 @@ function looksLikeRealAddress(address) {
 function extractContactInfo(text) {
   const phone = extractPhone(text);
   const address = extractAddress(text);
+  const phoneLabel = hasPhoneLabel(text);
+  const addressLabel = hasAddressLabel(text);
+  const phoneValid = Boolean(phone);
+  const addressValid = looksLikeRealAddress(address);
   return {
     phone,
     address,
-    phoneValid: Boolean(phone),
-    addressValid: looksLikeRealAddress(address),
+    phoneValid,
+    addressValid,
+    phoneLabel,
+    addressLabel,
+    hasCompleteContact: phoneValid && addressValid && phoneLabel && addressLabel,
     hasContact: Boolean(phone || address)
   };
 }
@@ -296,21 +255,26 @@ function classifyMessage(text) {
   }
   const hasPhone = detectPhoneNumber(text);
   const hasAddress = detectAddressMention(text);
+  const phoneLabel = hasPhoneLabel(text);
+  const addressLabel = hasAddressLabel(text);
   const addressValid = hasAddress && hasCompleteAdministrativeAddress(text);
   const addressRole = hasAddress ? 'CUSTOMER_ADDRESS' : 'NONE';
-  const contactState = hasPhone && addressValid
+  const contactState = hasPhone && phoneLabel && addressValid && addressLabel
     ? 'COMPLETE'
     : hasAddress && !addressValid
       ? 'INCOMPLETE_ADDRESS'
-      : hasPhone
+      : hasPhone && hasAddress
+        ? 'INCOMPLETE_CONTACT'
+    : hasPhone
         ? 'PHONE_ONLY'
         : addressValid
           ? 'ADDRESS_ONLY'
           : 'NONE';
-  const result = { hasPhone, hasAddress, addressRole, contactState };
+  const result = { hasPhone, hasAddress, phoneLabel, addressLabel, addressValid, addressRole, contactState };
   if (contactState === 'COMPLETE') return { intent: 'BUY_INTENT_HIGH', ...result };
   if (contactState === 'PHONE_ONLY') return { intent: 'PHONE_DETECTED', ...result };
   if (contactState === 'ADDRESS_ONLY') return { intent: 'ADDRESS_DETECTED', ...result };
+  if (contactState === 'INCOMPLETE_CONTACT') return { intent: 'ADDRESS_INCOMPLETE', ...result };
   if (contactState === 'INCOMPLETE_ADDRESS') return { intent: 'ADDRESS_INCOMPLETE', ...result };
   if (detectPriceQuestion(text)) return { intent: 'PRICE_QUESTION', ...result };
   if (detectBuyIntent(text)) return { intent: 'BUY_INTENT_LOW', ...result };
@@ -319,18 +283,14 @@ function classifyMessage(text) {
 }
 
 module.exports = {
-  MAX_CUSTOMER_TAGS,
-  MAX_CUSTOMER_TAG_LENGTH,
   normalizeText,
   normalizeVietnameseText,
-  sanitizeCustomerTags,
-  getEligibleReturningCustomerTags,
-  getRepurchaseBlocker,
-  detectExplicitRepurchase,
   isNonTextMessage,
   stripUrls,
   detectPhoneNumber,
   detectAddress,
+  hasPhoneLabel,
+  hasAddressLabel,
   detectStoreLocationRequest,
   hasCompleteAdministrativeAddress,
   extractPhone,

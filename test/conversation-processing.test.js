@@ -33,7 +33,6 @@ function createHarness(overrides = {}) {
   const blocked = new Set();
   const calls = {
     commits: [],
-    reviews: [],
     blocks: []
   };
   const coordinator = createConversationProcessingCoordinator({
@@ -43,7 +42,6 @@ function createHarness(overrides = {}) {
       processed.add(key);
       calls.commits.push(key);
     },
-    addReviewItem: (item) => calls.reviews.push(item),
     isConversationBlocked: (key) => blocked.has(key),
     blockConversation: (key) => {
       blocked.add(key);
@@ -122,7 +120,6 @@ test('conversation processing: stale pre-click failure releases claim without co
 
   assert.equal(result.code, 'STALE_CONVERSATION');
   assert.deepEqual(calls.commits, []);
-  assert.deepEqual(calls.reviews, []);
   assert.deepEqual(releases, [['conversation-1', 'bot1']]);
   assert.equal(claims.claimConversation('conversation-1', { tabId: 'bot2' }), true);
 });
@@ -139,7 +136,6 @@ test('conversation processing: confirmed click commits exactly once', async () =
   assert.equal(result.ok, true);
   assert.equal(actionCount, 1);
   assert.deepEqual(calls.commits, ['conversation-1']);
-  assert.deepEqual(calls.reviews, []);
   assert.deepEqual(calls.blocks, []);
 
   const second = await coordinator.process(job({ tabId: 'bot2' }, async () => {
@@ -226,7 +222,7 @@ test('conversation processing: lost deferred heartbeat prevents commit', async (
   assert.deepEqual(calls.commits, []);
 });
 
-test('conversation processing: uncertain action is not retried, is blocked, and creates a sanitized review item', async () => {
+test('conversation processing: uncertain action is not retried and remains blocked', async () => {
   const claims = createClaims();
   const releases = [];
   const release = claims.releaseConversationClaim.bind(claims);
@@ -256,14 +252,6 @@ test('conversation processing: uncertain action is not retried, is blocked, and 
   assert.equal(actionCount, 1);
   assert.deepEqual(calls.commits, []);
   assert.deepEqual(calls.blocks, ['conversation-1']);
-  assert.deepEqual(calls.reviews, [{
-    conversationId: 'conversation-1',
-    tabId: 'bot1',
-    code: 'ACTION_TIMEOUT',
-    stage: 'clickConversationById'
-  }]);
-  assert.equal(JSON.stringify(calls.reviews).includes('Alice'), false);
-  assert.equal(JSON.stringify(calls.reviews).includes('private stack'), false);
   assert.deepEqual(releases, [['conversation-1', 'bot1']]);
 
   const second = await coordinator.process(job({ tabId: 'bot2' }, async () => {

@@ -12,7 +12,6 @@
       commitProcessed = () => {},
       isConversationBlocked = () => false,
       blockConversation = () => {},
-      addReviewItem = () => {},
       claimRefreshIntervalMs = 20000,
       setIntervalFn = setInterval,
       clearIntervalFn = clearInterval
@@ -22,14 +21,6 @@
       throw new TypeError('Conversation processing requires a claims registry');
     }
 
-    const allowedStages = new Set([
-      'clickConversationById',
-      'setReplyText',
-      'clickSendButton',
-      'applyTagByName',
-      'markCurrentConversationUnread'
-      ,'postClick'
-    ]);
     const deferredLeases = new Map();
 
     function stopDeferredLease(key) {
@@ -59,26 +50,9 @@
       if (typeof lease.timer?.unref === 'function') lease.timer.unref();
     }
 
-    function safeCode(value) {
-      const code = String(value || '').toUpperCase();
-      return /^[A-Z0-9_]{1,64}$/.test(code) ? code : 'ACTION_UNCERTAIN';
-    }
-
     async function uncertainResult(job, actionResult) {
-      const code = safeCode(actionResult?.code);
       blockConversation(job.key);
-      let reviewQueued = true;
-      try {
-        await addReviewItem({
-          conversationId: String(job.conversationId || job.key || '').slice(0, 200),
-          tabId: ['bot1', 'bot2'].includes(job.runtime?.tabId) ? job.runtime.tabId : '',
-          code,
-          stage: allowedStages.has(job.stage) ? job.stage : 'action'
-        });
-      } catch (_) {
-        reviewQueued = false;
-      }
-      return { ok: false, code: 'UNCERTAIN', uncertain: true, reviewQueued };
+      return { ok: false, code: 'UNCERTAIN', uncertain: true };
     }
 
     async function process(job = {}) {

@@ -4,7 +4,7 @@ const express = require('express');
 const cors = require('cors');
 const multer = require('multer');
 const fs = require('fs');
-const { getSettings, saveSettings, getShortcuts, saveShortcuts, getLogs, appendLog, clearLogs, getExamples, appendExample, deleteExample, deleteExampleByPair, clearExamples, getReviewQueue, addOrUpdateReviewItem, markReviewItemDone, deleteReviewItem, clearDoneReviewItems, UPLOADS } = require('./store');
+const { getSettings, saveSettings, getShortcuts, saveShortcuts, getLogs, appendLog, clearLogs, getExamples, appendExample, deleteExample, deleteExampleByPair, clearExamples, getReviewQueue, addOrUpdateReviewItem, claimReviewItemSend, releaseReviewItemSend, markReviewItemDone, deleteReviewItem, clearDoneReviewItems, UPLOADS } = require('./store');
 const { parseExcel, createTemplateBuffer } = require('./shortcutImporter');
 const { analyzeMessageWithAI, summarizeAIConfig, testAIConnection } = require('./ai');
 const { classifyMessage } = require('./rules');
@@ -12,6 +12,7 @@ const { buildAddressLookup } = require('./addressLookup');
 const { findSimilarExamples } = require('./shortcutMatcher');
 const { isShortcut } = require('./validators');
 const telegram = require('./telegram');
+const { synthesizeSpeech, testTtsConnection, getAudioContentType } = require('./tts');
 const { MAX_EXCEL_BYTES, isAllowedExcelUpload } = require('./uploadPolicy');
 
 function isAllowedCorsOrigin(origin) {
@@ -27,7 +28,7 @@ function redactSettings(settings) {
   return { ...safeSettings, aiApiKeyConfigured: Boolean(aiApiKey) };
 }
 function getAiTestErrorStatus(error) {
-  return ['AI_NETWORK_ERROR', 'AI_PROVIDER_ERROR'].includes(error?.code) ? 502 : 400;
+  return ['AI_NETWORK_ERROR', 'AI_PROVIDER_ERROR', 'AI_EMPTY_RESPONSE', 'AI_INVALID_RESPONSE'].includes(error?.code) ? 502 : 400;
 }
 
 const upload = multer({
@@ -74,7 +75,8 @@ async function handleAnalyzeMessage(req, res) {
   res.json(output);
 }
 
-function createApp({ authToken = process.env.LOCAL_API_TOKEN } = {}) {
+function createApp({ authToken = process.env.LOCAL_API_TOKEN, telegramBot = null } = {}) {
+  const appTelegram = telegramBot || telegram;
   const app = express();
   app.use(cors({
     origin(origin, callback) {
@@ -117,7 +119,8 @@ function createApp({ authToken = process.env.LOCAL_API_TOKEN } = {}) {
     const patch = {
       aiBaseUrl: String(req.body?.aiBaseUrl || '').trim(),
       aiApiKey: String(req.body?.aiApiKey || '').trim(),
-      aiModel: String(req.body?.aiModel || '').trim()
+      aiModel: String(req.body?.aiModel || '').trim(),
+      aiProtocol: String(req.body?.aiProtocol || 'auto').trim().toLowerCase()
     };
     const saved = await saveSettings(patch);
     const output = summarizeAIConfig(saved);
@@ -244,13 +247,8 @@ function createApp({ authToken = process.env.LOCAL_API_TOKEN } = {}) {
 
   app.post('/api/examples/clear', async (_req, res) => res.json(await clearExamples()));
 
-  // --- Review queue (Admin Review Queue) ---
   app.get('/api/review-queue', async (_req, res) => {
-    try {
-      res.json(await getReviewQueue());
-    } catch (error) {
-      res.status(500).json({ error: error.message });
-    }
+    res.json(await getReviewQueue());
   });
 
   app.post('/api/review-queue', async (req, res) => {
@@ -258,71 +256,67 @@ function createApp({ authToken = process.env.LOCAL_API_TOKEN } = {}) {
       const body = req.body || {};
       const conversationId = String(body.conversationId || '').trim();
       const pancakeUrl = String(body.pancakeUrl || '').trim();
-      const hasValidUrl = /^https?:\/\//.test(pancakeUrl);
-      if (!conversationId && !hasValidUrl) {
+      if (!conversationId && !/^https:\/\//i.test(pancakeUrl)) {
         return res.status(400).json({ error: 'Thiếu tham chiếu cuộc trò chuyện' });
       }
-      const { item, updated } = await addOrUpdateReviewItem(body);
+      const result = await addOrUpdateReviewItem(body);
       await appendLog({
         level: 'INFO',
         type: 'REVIEW_QUEUE',
-        message: `${updated ? 'Cập nhật' : 'Thêm'} ca chờ xử lý: ${item.conversationId || item.pancakeUrl}`,
-        data: { item, updated }
+        message: `${result.updated ? 'Cập nhật' : 'Thêm'} ca chờ xử lý: ${result.item.conversationId || result.item.pancakeUrl}`,
+        data: { item: result.item, updated: result.updated }
       });
-      res.json({ ok: true, item, updated });
+      Promise.resolve(appTelegram.notifyReviewCase?.(result.item)).catch(() => {});
+      res.json({ ok: true, ...result });
     } catch (error) {
-      res.status(500).json({ error: error.message });
+      res.status(500).json({ error: 'Không thể thêm ca xử lý' });
     }
   });
 
   app.post('/api/review-queue/:id/done', async (req, res) => {
-    try {
-      const item = await markReviewItemDone(req.params.id);
-      if (!item) return res.status(404).json({ error: 'Không tìm thấy mục trong hàng đợi' });
-      await appendLog({
-        level: 'SUCCESS',
-        type: 'REVIEW_QUEUE',
-        message: `Đã hoàn tất ca chờ xử lý: ${item.conversationId || item.pancakeUrl}`,
-        data: { item }
-      });
-      res.json({ ok: true, item });
-    } catch (error) {
-      res.status(500).json({ error: error.message });
-    }
+    const item = await markReviewItemDone(req.params.id);
+    if (!item) return res.status(404).json({ error: 'Không tìm thấy mục trong hàng đợi' });
+    await appendLog({ level: 'SUCCESS', type: 'REVIEW_QUEUE', message: `Đã hoàn tất ca chờ xử lý: ${item.conversationId || item.pancakeUrl}`, data: { item } });
+    res.json({ ok: true, item });
   });
 
   app.delete('/api/review-queue/:id', async (req, res) => {
-    try {
-      const result = await deleteReviewItem(req.params.id);
-      if (!result) return res.status(404).json({ error: 'Không tìm thấy mục trong hàng đợi' });
-      await appendLog({
-        level: 'WARN',
-        type: 'REVIEW_QUEUE',
-        message: `Đã xóa ca chờ xử lý: ${req.params.id}`,
-        data: { id: req.params.id }
-      });
-      res.json({ ok: true, items: result.items });
-    } catch (error) {
-      res.status(500).json({ error: error.message });
-    }
+    const result = await deleteReviewItem(req.params.id);
+    if (!result) return res.status(404).json({ error: 'Không tìm thấy mục trong hàng đợi' });
+    await appendLog({ level: 'WARN', type: 'REVIEW_QUEUE', message: `Đã xóa ca chờ xử lý: ${req.params.id}`, data: { id: req.params.id } });
+    res.json({ ok: true, items: result.items });
   });
 
   app.post('/api/review-queue/clear-done', async (_req, res) => {
-    try {
-      const { items, removed } = await clearDoneReviewItems();
-      await appendLog({
-        level: 'INFO',
-        type: 'REVIEW_QUEUE',
-        message: `Đã xóa ${removed} mục đã hoàn tất khỏi hàng đợi`,
-        data: { removed }
-      });
-      res.json({ ok: true, removed, items });
-    } catch (error) {
-      res.status(500).json({ error: error.message });
-    }
+    const result = await clearDoneReviewItems();
+    await appendLog({ level: 'INFO', type: 'REVIEW_QUEUE', message: `Đã xóa ${result.removed} mục đã hoàn tất khỏi hàng đợi`, data: { removed: result.removed } });
+    res.json({ ok: true, ...result });
   });
 
   app.post('/api/rules/classify', (req, res) => res.json(classifyMessage(req.body?.text || '')));
+
+  app.post('/api/tts/synthesize', async (req, res) => {
+    const text = String(req.body?.input || req.body?.text || '').trim();
+    if (!text || text.length > 2000) return res.status(400).json({ error: 'Nội dung TTS không hợp lệ' });
+    try {
+      const responseFormat = req.body?.format || req.body?.responseFormat;
+      const audio = await synthesizeSpeech(text, {
+        model: req.body?.model,
+        responseFormat
+      });
+      res.type(getAudioContentType(responseFormat)).send(audio);
+    } catch (error) {
+      res.status(502).json({ error: error.code || 'TTS_UNAVAILABLE' });
+    }
+  });
+
+  app.post('/api/tts/test', async (_req, res) => {
+    try {
+      res.json({ ok: await testTtsConnection() });
+    } catch (error) {
+      res.status(502).json({ ok: false, error: error.code || 'TTS_UNAVAILABLE' });
+    }
+  });
 
   app.post('/api/address/lookup', (req, res) => {
     const { message = '', customerName = '', phone = '' } = req.body || {};
@@ -340,21 +334,42 @@ function createApp({ authToken = process.env.LOCAL_API_TOKEN } = {}) {
   app.post('/api/notify/test', async (_req, res) => {
     const msg = 'Test thông báo từ Pancake Desktop AI Shortcut Bot';
     await appendLog({ level: 'INFO', type: 'NOTIFY', message: msg });
-    const sent = await telegram.sendTelegram(`🔔 ${msg}`);
+    const sent = await appTelegram.sendTelegram(`🔔 ${msg}`);
     res.json({ ok: true, message: msg, telegramSent: sent });
   });
 
   app.post('/api/notify/buy', async (req, res) => {
     const { customerName = '', phone = '', address = '', message = '', addressLookup = null } = req.body || {};
-    const sent = await telegram.notifyBuyCustomer({ customerName, phone, address, message, addressLookup });
+    const sent = await appTelegram.notifyBuyCustomer?.({ customerName, phone, address, message, addressLookup });
     res.json({ ok: true, telegramSent: sent });
+  });
+
+  app.post('/api/notify/system-alert', async (req, res) => {
+    const sent = await appTelegram.notifySystemAlert?.({
+      tabId: req.body?.tabId,
+      level: req.body?.level,
+      message: req.body?.message,
+      pancakeUrl: req.body?.pancakeUrl
+    });
+    res.json({ ok: true, telegramSent: Boolean(sent) });
+  });
+
+  app.post('/api/notify/complaint-alert', async (req, res) => {
+    const sent = await appTelegram.notifyComplaintAlert?.({
+      customerName: req.body?.customerName,
+      conversationId: req.body?.conversationId,
+      message: req.body?.message,
+      pancakeUrl: req.body?.pancakeUrl,
+      reason: req.body?.reason
+    });
+    res.json({ ok: true, telegramSent: Boolean(sent) });
   });
 
   // Centralized error handler: log + notify Telegram, never leak stack to client.
   app.use((err, _req, res, _next) => {
     const detail = err && err.message ? err.message : String(err);
     appendLog({ level: 'ERROR', type: 'SERVER', message: `Lỗi xử lý request: ${detail}` }).catch(() => {});
-    telegram.notifyError('Request', detail).catch(() => {});
+    Promise.resolve(appTelegram.notifyError?.('Request', detail)).catch(() => {});
     if (res.headersSent) return;
     res.status(500).json({ error: 'Lỗi server nội bộ' });
   });
@@ -363,14 +378,57 @@ function createApp({ authToken = process.env.LOCAL_API_TOKEN } = {}) {
 }
 
 function startServer(port = Number(process.env.PORT || 8787), options = {}) {
-  const app = createApp(options);
+  const telegramBot = options.telegramBot || telegram.createTelegramBot({
+    getStatus: async () => {
+      const current = await getSettings();
+      return {
+        running: Boolean(current.botEnabled),
+        autoSend: Boolean(current.autoSend),
+        tts: Boolean(current.buyTtsEnabled),
+        shortcut: current.defaultNewCustomerShortcut,
+        newCustomerTag: current.newCustomerTagName,
+        buyTag: current.buyTagName
+      };
+    },
+    startBot: async () => {
+      await saveSettings({ botEnabled: true });
+      await options.telegramControl?.startBot?.();
+    },
+    stopBot: async () => {
+      await saveSettings({ botEnabled: false });
+      await options.telegramControl?.stopBot?.();
+    },
+    setAutoSend: async (enabled) => {
+      await saveSettings({ autoSend: Boolean(enabled) });
+      await options.telegramControl?.setAutoSend?.(Boolean(enabled));
+    },
+    getDailyReport: async () => telegram.formatDailyReport(telegram.buildDailyStats(await getLogs())),
+    reviewCallbacks: {
+      send: async ({ reviewCaseId }) => {
+        const item = await claimReviewItemSend(reviewCaseId);
+        if (!item) return false;
+        const handled = await options.telegramControl?.sendReviewShortcut?.(item);
+        if (handled !== true) {
+          await releaseReviewItemSend(reviewCaseId);
+          return false;
+        }
+        await markReviewItemDone(reviewCaseId);
+        return true;
+      },
+      done: async ({ reviewCaseId }) => Boolean(await markReviewItemDone(reviewCaseId)),
+      del: async ({ reviewCaseId }) => Boolean(await deleteReviewItem(reviewCaseId))
+    }
+  });
+  const app = createApp({ ...options, telegramBot });
   return new Promise((resolve) => {
     const server = app.listen(getServerListenOptions(port), () => {
       console.log(`[server] http://127.0.0.1:${port}`);
       telegram.notifyServerUp(port).catch(() => {});
-      telegram.scheduleDailyReport(getLogs);
+      telegramBot.startPolling();
+      telegramBot.scheduleDailyReport(getLogs);
       resolve(server);
     });
+    server.on('close', () => { telegramBot.stopPolling().catch(() => {}); });
   });
 }
 

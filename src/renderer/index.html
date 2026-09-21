@@ -50,7 +50,6 @@
       <button id="miniBotBtn" class="mini-btn" aria-label="Bật/tắt bot" data-tooltip="Run bot"><span class="mini-dot"></span><span data-icon="play"></span><span class="mini-label">Run</span></button>
       <button id="miniAutoClickBtn" class="mini-btn" aria-label="Bật/tắt Auto Click (tốc độ cao)"><span class="mini-dot"></span><span data-icon="zap"></span><span class="mini-label">Auto</span></button>
       <button id="miniAutoReplyPreviewBtn" class="mini-btn" aria-label="Bật/tắt bot chạy bình luận Preview Reply" data-tooltip="Comment bot"><span class="mini-dot"></span><span data-icon="message"></span><span class="mini-label">Comment</span></button>
-      <button id="miniQueueBtn" class="mini-btn" aria-label="Hàng đợi chờ xử lý"><span data-icon="clock"></span><span class="mini-label">Queue</span><span id="miniQueueBadge" class="badge">0</span></button>
       <button id="miniSuggestBtn" class="mini-btn" aria-label="Gợi ý"><span data-icon="lightbulb"></span><span class="mini-label">AI</span></button>
       <button id="miniPanelBtn" class="mini-btn" aria-label="Mở bảng điều khiển" data-tooltip="Controls"><span data-icon="menu"></span><span class="mini-label">Controls</span></button>
     </aside>
@@ -80,7 +79,6 @@
         <button class="tab" data-tab="ai">Gợi ý</button>
         <button class="tab" data-tab="dom">DOM Test</button>
         <button class="tab" data-tab="ext">Extension</button>
-        <button class="tab" data-tab="reviewQueuePanel">Chờ xử lý <span id="reviewQueueBadge" class="badge">0</span></button>
         <button class="tab" data-tab="logs">Logs</button>
       </nav>
 
@@ -144,6 +142,7 @@
           <label class="toggle"><input id="autoSend" type="checkbox" /> <span>Auto Send shortcut</span></label>
           <label class="toggle"><input id="shortcutOnlyMode" type="checkbox" checked /> <span>Chỉ cho gửi /n</span></label>
           <label class="toggle"><input id="buyTtsEnabled" type="checkbox" checked /> <span>Đọc loa khi có khách mua hàng</span></label>
+          <label class="toggle"><input id="buyTtsExternalEnabled" type="checkbox" checked /> <span>Dùng giọng đọc TTS từ server</span></label>
           <div class="form-row"><label>Shortcut khách mới</label><input id="newCustomerShortcut" value="/1" /></div>
           <div class="form-row"><label>Tag khách mới</label><input id="newCustomerTag" value="Saruto Mới" /></div>
           <div class="form-row"><label>Tag mua hàng</label><input id="buyTag" value="Mua hàng" /></div>
@@ -209,9 +208,10 @@
       <section id="ai" class="tab-panel">
         <div class="card">
           <h3>AI Config</h3>
-          <div class="form-row"><label>Base URL</label><input id="aiBaseUrl" placeholder="https://api.openai.com/v1" /></div>
+          <div class="form-row"><label>Protocol</label><select id="aiProtocol"><option value="auto">Auto detect</option><option value="openai">OpenAI-compatible</option><option value="antigravity">Antigravity / Interactions native</option><option value="gemini">Gemini API native</option></select></div>
+          <div class="form-row"><label>Base URL</label><input id="aiBaseUrl" placeholder="https://generativelanguage.googleapis.com/v1beta" /></div>
           <div class="form-row"><label>API Key</label><input id="aiApiKey" type="password" placeholder="sk-..." /></div>
-          <div class="form-row"><label>Model</label><input id="aiModel" placeholder="gpt-5-mini" /></div>
+          <div class="form-row"><label>Model / Agent</label><input id="aiModel" placeholder="antigravity-preview-09-2026" /></div>
           <div class="actions">
             <button id="saveAiConfigBtn" class="btn">Luu AI config</button>
             <button id="testAiBtn" class="btn ghost">Test AI</button>
@@ -272,19 +272,6 @@
           </div>
           <div id="extList" class="ai-result">Đang tải danh sách extension...</div>
         </div>
-      </section>
-
-      <section id="reviewQueuePanel" class="tab-panel">
-        <div class="rq-header">
-          <h3>Chờ admin xử lý (<span id="reviewQueueCount">0</span>)</h3>
-          <div>
-            <button id="reviewQueueRefresh" class="btn small">Tải lại</button>
-            <button id="reviewQueueClearDone" class="btn small">Xóa mục đã xong</button>
-          </div>
-        </div>
-        <div id="reviewQueueError" class="rq-error hidden"></div>
-        <div id="reviewQueueEmpty" class="rq-empty hidden">Hàng đợi trống.</div>
-        <ul id="reviewQueueList" class="rq-list"></ul>
       </section>
 
       <section id="logs" class="tab-panel">

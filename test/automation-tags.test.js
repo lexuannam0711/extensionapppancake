@@ -117,7 +117,7 @@ test('getCurrentTags warns when the tag panel is unavailable and row tags are us
   assert.match(String(warnings[0][0]), /tag panel/i);
 });
 
-test('repurchase escalation does not toggle off an already-active Mua hàng tag', async () => {
+test('already-active Mua hàng tag is not toggled off', async () => {
   const calls = { scroll: 0, click: 0 };
   const button = {
     textContent: 'Mua hàng',

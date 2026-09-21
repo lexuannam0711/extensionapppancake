@@ -74,6 +74,18 @@ function decideBeforeAnalysis({ info, lastSender, settings } = {}) {
   };
 }
 
+function hasCompleteContactPackage(contactInfo) {
+  return Boolean(
+    contactInfo &&
+    contactInfo.phone &&
+    contactInfo.address &&
+    contactInfo.phoneValid === true &&
+    contactInfo.addressValid === true &&
+    contactInfo.phoneLabel === true &&
+    contactInfo.addressLabel === true
+  );
+}
+
 function decideAfterAnalysis({ analysis, settings } = {}) {
   const result = analysis || {};
   const tagName = settings?.buyTagName || 'Mua hàng';
@@ -81,12 +93,12 @@ function decideAfterAnalysis({ analysis, settings } = {}) {
   const minConfidence = Number(settings?.minConfidence || 0.75);
   const autoSend = Boolean(settings?.autoSend);
   const contactInfo = result.contactInfo || {};
-  const hasContact = Boolean(contactInfo.phone || contactInfo.address);
+  const hasCompleteContact = hasCompleteContactPackage(contactInfo);
 
   if (result.action === 'SKIP' || result.intent === 'NON_TEXT') {
     return {
       phase: 'POST_ANALYSIS',
-      action: 'SKIPPED_NON_TEXT',
+      action: result.intent === 'NON_TEXT' ? 'SKIPPED_NON_TEXT' : 'SKIPPED_NO_ACTION',
       shortcut: null,
       tagName: '',
       shouldApplyBuyTag: false,
@@ -100,6 +112,21 @@ function decideAfterAnalysis({ analysis, settings } = {}) {
   }
 
   if (result.action === 'TAG_BUY_AND_MARK_UNREAD') {
+    if (!hasCompleteContact) {
+      return {
+        phase: 'POST_ANALYSIS',
+        action: 'SKIPPED_CONTACT_GATE',
+        shortcut: null,
+        tagName: '',
+        shouldApplyBuyTag: false,
+        shouldMarkUnread: false,
+        shouldNotifyBuy: false,
+        shouldEnqueueReview: false,
+        shouldFillShortcut: false,
+        shouldAttemptAutoSend: false,
+        recordExampleIfSent: false
+      };
+    }
     return {
       phase: 'POST_ANALYSIS',
       action: 'ESCALATED',
@@ -107,7 +134,7 @@ function decideAfterAnalysis({ analysis, settings } = {}) {
       tagName,
       shouldApplyBuyTag: true,
       shouldMarkUnread: true,
-      shouldNotifyBuy: hasContact,
+      shouldNotifyBuy: true,
       shouldEnqueueReview: true,
       shouldFillShortcut: false,
       shouldAttemptAutoSend: false,
@@ -115,7 +142,7 @@ function decideAfterAnalysis({ analysis, settings } = {}) {
     };
   }
 
-  if (!result.bestShortcut) {
+  if ((result.action && result.action !== 'SUGGEST_SHORTCUT') || !result.bestShortcut) {
     return {
       phase: 'POST_ANALYSIS',
       action: 'WAITING_REVIEW',

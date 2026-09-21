@@ -79,9 +79,15 @@ function createBuyTtsNotifier(options = {}) {
   const rate = Number.isFinite(Number(options.rate)) ? Number(options.rate) : 1;
   const pitch = Number.isFinite(Number(options.pitch)) ? Number(options.pitch) : 1;
   const volume = clampVolume(options.volume);
+  const getFetch = options.getFetch || (() => (
+    options.fetch || (typeof window !== 'undefined' ? window.fetch.bind(window) : globalThis.fetch)
+  ));
+  const getAudio = options.getAudio || (() => options.Audio || (typeof window !== 'undefined' ? window.Audio : null));
+  const getObjectUrl = options.getObjectUrl || (() => (typeof URL !== 'undefined' ? URL.createObjectURL.bind(URL) : null));
 
   let timer = null;
   let queue = [];
+  let pendingSettings = {};
   let lastSpokenText = '';
   const seen = new Map();
 
@@ -96,6 +102,7 @@ function createBuyTtsNotifier(options = {}) {
       if (key) seen.set(key, timestamp);
 
       queue.push({ ...event, timestamp: event.timestamp || timestamp });
+      pendingSettings = { ...pendingSettings, ...settings };
       if (timer) clearTimer(timer);
       const debounceMs = readPositiveNumber(settings.buyTtsDebounceMs, defaultDebounceMs);
       timer = setTimer(flush, debounceMs);
@@ -111,15 +118,45 @@ function createBuyTtsNotifier(options = {}) {
       timer = null;
       if (!batch.length) return '';
       const text = batch.length > 1 ? buildGroupedBuySpeech(batch.length) : buildSingleBuySpeech(batch[0]);
-      speak(text);
+      const speakSettings = pendingSettings;
+      pendingSettings = {};
+      void speak(text, speakSettings);
       return text;
     } catch (_) {
       return '';
     }
   }
 
-  function speak(text) {
+  async function speakExternal(text, speakSettings = {}) {
+    const fetchImpl = getFetch();
+    const AudioCtor = getAudio();
+    const createObjectUrl = getObjectUrl();
+    if (typeof fetchImpl !== 'function' || typeof AudioCtor !== 'function' || typeof createObjectUrl !== 'function') return false;
+    const headers = { 'Content-Type': 'application/json' };
+    if (speakSettings.ttsApiToken) headers['x-local-api-token'] = String(speakSettings.ttsApiToken);
+    const response = await fetchImpl(speakSettings.ttsEndpoint || '/api/tts/synthesize', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ input: text })
+    });
+    if (!response?.ok) return false;
+    const blob = await response.blob();
+    if (!blob || !blob.size) return false;
+    const url = createObjectUrl(blob);
+    const audio = new AudioCtor(url);
+    audio.volume = volume;
+    await audio.play();
+    lastSpokenText = text;
+    return true;
+  }
+
+  async function speak(text, speakSettings = {}) {
     try {
+      if (speakSettings.buyTtsExternalEnabled === true) {
+        try {
+          if (await speakExternal(text, speakSettings)) return true;
+        } catch (_) {}
+      }
       const speechSynthesis = getSpeechSynthesis();
       const Utterance = getUtteranceCtor();
       if (!speechSynthesis || typeof speechSynthesis.speak !== 'function' || typeof Utterance !== 'function') return false;
@@ -144,6 +181,7 @@ function createBuyTtsNotifier(options = {}) {
     if (timer) clearTimer(timer);
     timer = null;
     queue = [];
+    pendingSettings = {};
     seen.clear();
     lastSpokenText = '';
   }
@@ -152,6 +190,7 @@ function createBuyTtsNotifier(options = {}) {
     notifyBuyCustomer,
     flush,
     speak,
+    speakExternal,
     clear,
     getQueueSize: () => queue.length,
     getLastSpokenText: () => lastSpokenText
@@ -174,6 +213,7 @@ const PDBBuyTtsNotifier = {
   notifyBuyCustomer: defaultNotifier.notifyBuyCustomer,
   flush: defaultNotifier.flush,
   speak: defaultNotifier.speak,
+  speakExternal: defaultNotifier.speakExternal,
   clear: defaultNotifier.clear
 };
 

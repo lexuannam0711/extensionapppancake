@@ -32,6 +32,7 @@ let activePort = Number(process.env.PORT || 8787);
 let visibleGcTimer = null;
 let automationActivity = null;
 const orderWindows = new Set();
+const pendingTelegramReviewAcks = new Map();
 const devToolsEnabled = isDevToolsEnabled();
 
 function publishControlPlaneStatus() {
@@ -111,6 +112,7 @@ function registerIpcHandlers() {
   ipcMain.removeHandler('updater:get-state');
   ipcMain.removeHandler('updater:check');
   ipcMain.removeHandler('updater:quit-and-install');
+  ipcMain.removeHandler('telegram:review-result');
 
   ipcMain.handle('app:get-env', () => ({
     serverUrl: `http://localhost:${activePort}`,
@@ -216,6 +218,17 @@ function registerIpcHandlers() {
   ipcMain.handle('updater:get-state', () => updater?.getState?.() || { status: 'idle' });
   ipcMain.handle('updater:check', async () => updater?.checkForUpdates?.());
   ipcMain.handle('updater:quit-and-install', () => updater?.quitAndInstall?.());
+
+  ipcMain.handle('telegram:review-result', (_evt, payload = {}) => {
+    if (_evt.sender !== mainWindow?.webContents) return false;
+    const requestId = String(payload.requestId || '');
+    const pending = pendingTelegramReviewAcks.get(requestId);
+    if (!pending) return false;
+    pendingTelegramReviewAcks.delete(requestId);
+    clearTimeout(pending.timer);
+    pending.resolve(Boolean(payload.ok));
+    return true;
+  });
 }
 
 async function createWindow() {
@@ -245,7 +258,32 @@ async function createWindow() {
   });
   activePort = Number(process.env.PORT || 8787);
   registerIpcHandlers();
-  server = await startServer(activePort, { authToken: localApiToken });
+  server = await startServer(activePort, {
+    authToken: localApiToken,
+    telegramControl: {
+      startBot: async () => mainWindow?.webContents.send('telegram:control', { action: 'start_bot' }),
+      stopBot: async () => mainWindow?.webContents.send('telegram:control', { action: 'stop_bot' }),
+      setAutoSend: async (enabled) => mainWindow?.webContents.send('telegram:control', { action: 'autosend', enabled }),
+      sendReviewShortcut: async (reviewCase) => {
+        if (!mainWindow || mainWindow.isDestroyed()) return false;
+        const requestId = crypto.randomUUID();
+        return new Promise((resolve) => {
+          const timer = setTimeout(() => {
+            pendingTelegramReviewAcks.delete(requestId);
+            resolve(false);
+          }, 30000);
+          pendingTelegramReviewAcks.set(requestId, { resolve, timer });
+          try {
+            mainWindow.webContents.send('telegram:control', { action: 'send_review_shortcut', requestId, reviewCase });
+          } catch (_) {
+            clearTimeout(timer);
+            pendingTelegramReviewAcks.delete(requestId);
+            resolve(false);
+          }
+        });
+      }
+    }
+  });
 
   // Load extensions into the same session the webview uses
   // (partition "persist:pancake"). Best-effort: failure must not block startup.
